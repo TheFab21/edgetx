@@ -40,10 +40,10 @@
 #define LABEL_LENGTH 16
 
 #if defined(PCBHORUS) || defined(PCBNV14)
-  #define MAX_MODELS                   60
+  #define MAX_MODELS                   30
   #define MAX_OUTPUT_CHANNELS          32 // number of real output channels CH1-CH32
   #define MAX_FLIGHT_MODES             9
-  #define MAX_MIXERS                   64
+  #define MAX_MIXERS                   72
   #define MAX_EXPOS                    64
   #define MAX_LOGICAL_SWITCHES         64
   #define MAX_SPECIAL_FUNCTIONS        64 // number of functions assigned to switches
