@@ -7,13 +7,13 @@ import json_index
 
 MAIN_CONTROL_LUT = {
     # 2 Gimbal radios
-    "LH": { "str": "Rud", "local": "STR_STICK_NAMES[0]" },
-    "LV": { "str": "Ele", "local": "STR_STICK_NAMES[1]" },
-    "RV": { "str": "Thr", "local": "STR_STICK_NAMES[2]" },
-    "RH": { "str": "Ail", "local": "STR_STICK_NAMES[3]" },
+    "LH": { "str": "Rud", "local": "STR_STICK_NAMES0" },
+    "LV": { "str": "Ele", "local": "STR_STICK_NAMES1" },
+    "RV": { "str": "Thr", "local": "STR_STICK_NAMES2" },
+    "RH": { "str": "Ail", "local": "STR_STICK_NAMES3" },
     # Surface radios
-    "ST": { "str": "ST", "local": "STR_SURFACE_NAMES[0]" },
-    "TH": { "str": "TH", "local": "STR_SURFACE_NAMES[1]" },
+    "ST": { "str": "ST", "local": "STR_SURFACE_NAMES0" },
+    "TH": { "str": "TH", "local": "STR_SURFACE_NAMES1" },
 }
 
 # MUST be the same order as 'EnumKeys'
@@ -22,7 +22,6 @@ KEYS_LUT = [
   "KEY_EXIT",
   "KEY_ENTER",
 
-  "KEY_PAGE",
   "KEY_PAGEUP",
   "KEY_PAGEDN",
 
@@ -42,6 +41,22 @@ KEYS_LUT = [
   "KEY_SHIFT",
   "KEY_BIND",
 ]
+
+# def eprint(*args, **kwargs):
+#     from sys import stderr
+#     print(*args, file=stderr, **kwargs)
+
+def is_ext_input(input):
+
+    if input.get('type') != 'FLEX':
+        return False
+
+    name = input.get('name')
+    if name and name.startswith('EXT'):
+        return True
+
+    return False
+
 
 def generate_from_template(json_filename, template_filename, target):
 
@@ -69,6 +84,8 @@ def generate_from_template(json_filename, template_filename, target):
                 lstrip_blocks=True,
                 trim_blocks=True
             )
+
+            env.tests['ext_input'] = is_ext_input
 
             template_str = template_file.read()
             template = env.from_string(template_str)

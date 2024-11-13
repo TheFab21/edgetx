@@ -19,31 +19,34 @@
  * GNU General Public License for more details.
  */
 
-#ifndef _BOARD_H_
-#define _BOARD_H_
+#pragma once
 
 #include "definitions.h"
-#include "opentx_constants.h"
+#include "edgetx_constants.h"
 
 #include "board_common.h"
 #include "hal.h"
+
 #include "hal/serial_port.h"
+#include "hal/watchdog_driver.h"
 
 #define FLASHSIZE                       0x200000
+#define FLASH_PAGESIZE                  256
 #define BOOTLOADER_SIZE                 0x20000
 #define FIRMWARE_ADDRESS                0x08000000
+#define FIRMWARE_LEN(fsize)             (fsize - BOOTLOADER_SIZE)
+#define FIRMWARE_MAX_LEN                (FLASHSIZE - BOOTLOADER_SIZE)
+#define APP_START_ADDRESS               (uint32_t)(FIRMWARE_ADDRESS + BOOTLOADER_SIZE)
 
 #define MB                              *1024*1024
 #define LUA_MEM_EXTRA_MAX               (2 MB)    // max allowed memory usage for Lua bitmaps (in bytes)
 #define LUA_MEM_MAX                     (6 MB)    // max allowed memory usage for complete Lua  (in bytes), 0 means unlimited
 
+#define BOOTLOADER_KEYS 0x42
+
 extern uint16_t sessionTimer;
 
 #define SLAVE_MODE()                    (g_model.trainerData.mode == TRAINER_MODE_SLAVE)
-
-// initilizes the board for the bootloader
-#define HAVE_BOARD_BOOTLOADER_INIT 1
-void boardBootloaderInit();
 
 // Board driver
 void boardInit();
@@ -52,40 +55,6 @@ void boardOff();
 // CPU Unique ID
 #define LEN_CPU_UID                     (3*8+2)
 void getCPUUniqueID(char * s);
-
-// SD driver
-#define BLOCK_SIZE                      512 /* Block Size in Bytes */
-#if !defined(SIMU) || defined(SIMU_DISKIO)
-uint32_t sdIsHC();
-uint32_t sdGetSpeed();
-#define SD_IS_HC()                     (sdIsHC())
-#define SD_GET_SPEED()                 (sdGetSpeed())
-#define SD_GET_FREE_BLOCKNR()          (sdGetFreeSectors())
-#define SD_CARD_PRESENT()              (~SD_PRESENT_GPIO->IDR & SD_PRESENT_GPIO_PIN)
-void sdInit();
-void sdMount();
-void sdDone();
-#define sdPoll10ms()
-uint32_t sdMounted();
-#else
-#define SD_IS_HC()                      (0)
-#define SD_GET_SPEED()                  (0)
-#define sdInit()
-#define sdMount()
-#define sdDone()
-#define SD_CARD_PRESENT()               true
-#endif
-
-// Flash Write driver
-#define FLASH_PAGESIZE 256
-void unlockFlash();
-void lockFlash();
-void flashWrite(uint32_t * address, const uint32_t * buffer);
-uint32_t isFirmwareStart(const uint8_t * buffer);
-uint32_t isBootloaderStart(const uint8_t * buffer);
-
-// SDRAM driver
-void SDRAM_Init();
 
 enum {
   PCBREV_NV14 = 0,
@@ -103,24 +72,24 @@ extern HardwareOptions hardwareOptions;
 #define INTERNAL_MODULE_OFF()                                     \
   do {                                                            \
     if (hardwareOptions.pcbrev == PCBREV_NV14)                    \
-      GPIO_SetBits(INTMODULE_PWR_GPIO, INTMODULE_PWR_GPIO_PIN);   \
+      gpio_set(INTMODULE_PWR_GPIO);				  \
     else                                                          \
-      GPIO_ResetBits(INTMODULE_PWR_GPIO, INTMODULE_PWR_GPIO_PIN); \
+      gpio_clear(INTMODULE_PWR_GPIO);				  \
   } while (0)
 
 #define INTERNAL_MODULE_ON()                                      \
   do {                                                            \
     if (hardwareOptions.pcbrev == PCBREV_NV14)                    \
-      GPIO_ResetBits(INTMODULE_PWR_GPIO, INTMODULE_PWR_GPIO_PIN); \
+      gpio_clear(INTMODULE_PWR_GPIO);				  \
     else                                                          \
-      GPIO_SetBits(INTMODULE_PWR_GPIO, INTMODULE_PWR_GPIO_PIN);   \
+      gpio_set(INTMODULE_PWR_GPIO);				  \
   } while (0)
 
-#define EXTERNAL_MODULE_ON()            GPIO_SetBits(EXTMODULE_PWR_GPIO, EXTMODULE_PWR_GPIO_PIN)
-#define EXTERNAL_MODULE_OFF()           GPIO_ResetBits(EXTMODULE_PWR_GPIO, EXTMODULE_PWR_GPIO_PIN)
+#define EXTERNAL_MODULE_ON()            gpio_set(EXTMODULE_PWR_GPIO)
+#define EXTERNAL_MODULE_OFF()           gpio_clear(EXTMODULE_PWR_GPIO)
 
-#define BLUETOOTH_MODULE_ON()           GPIO_ResetBits(BLUETOOTH_ON_GPIO, BLUETOOTH_ON_GPIO_PIN)
-#define BLUETOOTH_MODULE_OFF()          GPIO_SetBits(BLUETOOTH_ON_GPIO, BLUETOOTH_ON_GPIO_PIN)
+#define BLUETOOTH_MODULE_ON()           gpio_clear(BLUETOOTH_ON_GPIO)
+#define BLUETOOTH_MODULE_OFF()          gpio_set(BLUETOOTH_ON_GPIO)
 
 #else
 
@@ -136,36 +105,17 @@ extern HardwareOptions hardwareOptions;
 #endif // defined(SIMU)
 
 #define EXTERNAL_MODULE_PWR_OFF         EXTERNAL_MODULE_OFF
-#define IS_UART_MODULE(port)            (port == INTERNAL_MODULE)
-#define IS_PXX2_INTERNAL_ENABLED()      (false)
 
 #if !defined(NUM_FUNCTIONS_SWITCHES)
 #define NUM_FUNCTIONS_SWITCHES        0
 #endif
 
-#define NUM_TRIMS_KEYS                  (NUM_TRIMS * 2)
-
-#define DEFAULT_STICK_DEADZONE          2
-
-// 2 pots without detent
-#define DEFAULT_POTS_CONFIG   \
-  (POT_WITHOUT_DETENT << 0) + \
-      (POT_WITHOUT_DETENT << 2)
+#define DEFAULT_STICK_DEADZONE        2
 
 #define BATTERY_WARN                  36 // 3.6V
 #define BATTERY_MIN                   35 // 3.5V
 #define BATTERY_MAX                   42 // 4.2V
-
-enum EnumPowerupState
-{
-  BOARD_POWER_OFF = 0xCAFEDEAD,
-  BOARD_POWER_ON = 0xDEADBEEF,
-  BOARD_STARTED = 0xBAADF00D,
-  BOARD_REBOOT = 0xC00010FF,
-};
-
-bool UNEXPECTED_SHUTDOWN();
-void SET_POWER_REASON(uint32_t value);
+#define BATTERY_DIVIDER               2942
 
 #if defined(__cplusplus) && !defined(SIMU)
 extern "C" {
@@ -173,7 +123,7 @@ extern "C" {
 
 // Power driver
 #define SOFT_PWR_CTRL
-#define POWER_ON_DELAY               10 // 1s
+#define POWER_ON_DELAY               100 // ms
 void pwrInit();
 void extModuleInit();
 uint32_t pwrCheck();
@@ -195,23 +145,10 @@ uint32_t pwrPressedDuration();;
 const etx_serial_port_t* auxSerialGetPort(int port_nr);
   
 // LCD driver
-#define LCD_W                           320
-#define LCD_H                           480
-
-#define LCD_PHYS_W                      320
-#define LCD_PHYS_H                      480
-
-#define LCD_DEPTH                       16
-#define LCD_CONTRAST_DEFAULT            20
-
+void lcdSetInitalFrameBuffer(void* fbAddress);
 void lcdInit();
 void lcdCopy(void * dest, void * src);
 
-void DMAFillRect(uint16_t * dest, uint16_t destw, uint16_t desth, uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color);
-void DMACopyBitmap(uint16_t * dest, uint16_t destw, uint16_t desth, uint16_t x, uint16_t y, const uint16_t * src, uint16_t srcw, uint16_t srch, uint16_t srcx, uint16_t srcy, uint16_t w, uint16_t h);
-void DMACopyAlphaBitmap(uint16_t * dest, uint16_t destw, uint16_t desth, uint16_t x, uint16_t y, const uint16_t * src, uint16_t srcw, uint16_t srch, uint16_t srcx, uint16_t srcy, uint16_t w, uint16_t h);
-void DMACopyAlphaMask(uint16_t * dest, uint16_t destw, uint16_t desth, uint16_t x, uint16_t y, const uint8_t * src, uint16_t srcw, uint16_t srch, uint16_t srcx, uint16_t srcy, uint16_t w, uint16_t h, uint16_t bg_color);
-void DMABitmapConvert(uint16_t * dest, const uint8_t * src, uint16_t w, uint16_t h, uint32_t format);
 
 void lcdOff();
 void lcdOn();
@@ -230,30 +167,20 @@ void backlightEnable(uint8_t dutyCycle);
 void backlightFullOn();
 bool isBacklightEnabled();
 
-#define BACKLIGHT_ENABLE()                                               \
-  {                                                                      \
-    boardBacklightOn = true;                                             \
-    backlightEnable(globalData.unexpectedShutdown                        \
-                        ? BACKLIGHT_LEVEL_MAX                            \
-                        : BACKLIGHT_LEVEL_MAX - currentBacklightBright); \
+#define BACKLIGHT_ENABLE()                                         \
+  {                                                                \
+    boardBacklightOn = true;                                       \
+    backlightEnable(BACKLIGHT_LEVEL_MAX - currentBacklightBright); \
   }
 
-#define BACKLIGHT_DISABLE()                                                 \
-  {                                                                         \
-    boardBacklightOn = false;                                               \
-    backlightEnable(globalData.unexpectedShutdown ? BACKLIGHT_LEVEL_MAX     \
-                    : ((g_eeGeneral.blOffBright == BACKLIGHT_LEVEL_MIN) &&  \
-                       (g_eeGeneral.backlightMode != e_backlight_mode_off)) \
-                        ? 0                                                 \
-                        : g_eeGeneral.blOffBright);                         \
+#define BACKLIGHT_DISABLE()                                               \
+  {                                                                       \
+    boardBacklightOn = false;                                             \
+    backlightEnable(((g_eeGeneral.blOffBright == BACKLIGHT_LEVEL_MIN) &&  \
+                     (g_eeGeneral.backlightMode != e_backlight_mode_off)) \
+                        ? 0                                               \
+                        : g_eeGeneral.blOffBright);                       \
   }
-
-#if !defined(SIMU)
-void usbJoystickUpdate();
-#endif
-#define USB_NAME                        "FlySky NV14"
-#define USB_MANUFACTURER                'F', 'l', 'y', 'S', 'k', 'y', ' ', ' '  /* 8 bytes */
-#define USB_PRODUCT                     'N', 'V', '1', '4', ' ', ' ', ' ', ' '  /* 8 Bytes */
 
 #if defined(__cplusplus) && !defined(SIMU)
 }
@@ -305,18 +232,10 @@ void hapticOff();
 void hapticOn(uint32_t pwmPercent);
 
 // Second serial port driver
-//#define AUX_SERIAL
 #define DEBUG_BAUDRATE                  115200
 #define LUA_DEFAULT_BAUDRATE            115200
-
-extern uint8_t currentTrainerMode;
-void checkTrainerSettings();
 
 // Touch panel driver
 bool touchPanelEventOccured();
 struct TouchState touchPanelRead();
 struct TouchState getInternalTouchState();
-
-#define BATTERY_DIVIDER 2942
-
-#endif // _BOARD_H_

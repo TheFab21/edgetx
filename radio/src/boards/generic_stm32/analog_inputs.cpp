@@ -47,6 +47,9 @@ constexpr uint8_t n_ADC_spi = DIM(_ADC_spi);
 constexpr uint8_t n_GPIO = DIM(_ADC_GPIOs);
 constexpr uint8_t n_inputs = DIM(_ADC_inputs);
 
+static_assert(n_inputs <= MAX_ADC_INPUTS, "Too many ADC inputs");
+static_assert(n_inputs <= MAX_ANALOG_INPUTS, "Too many analog inputs");
+
 static bool adc_init()
 {
   bool success = stm32_hal_adc_init(_ADC_adc, n_ADC, _ADC_inputs, _ADC_GPIOs, n_GPIO);
@@ -78,21 +81,24 @@ static void adc_wait_completion()
 }
 
 const etx_hal_adc_driver_t _adc_driver = {
-  _hal_inputs,
-  _pot_default_config,
-  adc_init,
-  adc_start_read,
-  adc_wait_completion
+  .inputs = _hal_inputs,
+  .default_pots_cfg = _pot_default_config,
+  .init = adc_init,
+  .start_conversion = adc_start_read,
+  .wait_completion = adc_wait_completion,
+  .set_input_mask = stm32_hal_set_inputs_mask,
+  .get_input_mask = stm32_hal_get_inputs_mask,
 };
 
 #if defined(PWM_STICKS)
+#include "stm32_gpio.h"
 
 static const stick_pwm_timer_t _sticks_timer = {
-  PWM_GPIO,
-  PWM_GPIOA_PINS,
-  PWM_GPIO_AF,
-  PWM_TIMER,
-  PWM_IRQn,
+  .GPIOx = PWM_GPIO,
+  .GPIO_Pin = PWM_GPIOA_PINS,
+  .GPIO_Alternate = PWM_GPIO_AF,
+  .TIMx = PWM_TIMER,
+  .TIM_IRQn = PWM_IRQn,
 };
 
 #if !defined(PWM_IRQHandler)

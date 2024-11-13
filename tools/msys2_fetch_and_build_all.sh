@@ -9,9 +9,9 @@
 
 # -----------------------------------------------------------------------------
 export BRANCH_NAME="main"  # main|2.9|...
-export RADIO_TYPE="tx16s"  # tx16s|x10|x10-access|x12s|x9d|x9dp|x9lite|x9lites|x7|x7-access|t12|tx12|tx12mk2|boxer|t8|zorro|tlite|tpro|t20/lr3pro|xlite|xlites|x9dp2019|x9e|x9e-hall|t16|t18|nv14|commando8|
+export RADIO_TYPE="tx16s"  # tx16s|x10|x10express|x12s|x9d|x9dp|x9lite|x9lites|x7|x7access|t12|t12max|tx12|tx12mk2|mt12|boxer|t8|zorro|pocket|tlite|tpro|t20|t20v2|t14|lr3pro|xlite|xlites|x9dp2019|x9e|x9e-hall|t15|t16|t18|nv14|commando8
 
-export BUILD_OPTIONS="-DDEFAULT_MODE=2 -DGVARS=YES -DPPM_UNIT=US"
+export BUILD_OPTIONS="-DDEFAULT_MODE=2 -DGVARS=YES"
 
 echo "Building ${fw_name}"
 case $RADIO_TYPE in
@@ -24,11 +24,14 @@ case $RADIO_TYPE in
     x7)
         BUILD_OPTIONS+=" -DPCB=X7"
         ;;
-    x7-access)
+    x7access)
         BUILD_OPTIONS+=" -DPCB=X7 -DPCBREV=ACCESS -DPXX1=YES"
         ;;
     t12)
         BUILD_OPTIONS+=" -DPCB=X7 -DPCBREV=T12 -DINTERNAL_MODULE_MULTI=ON"
+        ;;
+    mt12)
+        BUILD_OPTIONS+=" -DPCB=X7 -DPCBREV=MT12 -DINTERNAL_MODULE_MULTI=ON"
         ;;
     tx12)
         BUILD_OPTIONS+=" -DPCB=X7 -DPCBREV=TX12"
@@ -45,6 +48,9 @@ case $RADIO_TYPE in
     zorro)
         BUILD_OPTIONS+=" -DPCB=X7 -DPCBREV=ZORRO"
         ;;
+    pocket)
+        BUILD_OPTIONS+=" -DPCB=X7 -DPCBREV=POCKET"
+        ;;
     tlite)
         BUILD_OPTIONS+=" -DPCB=X7 -DPCBREV=TLITE"
         ;;
@@ -53,6 +59,15 @@ case $RADIO_TYPE in
         ;;
     t20)
         BUILD_OPTIONS+=" -DPCB=X7 -DPCBREV=T20"
+        ;;
+    t20v2)
+        BUILD_OPTIONS+=" -DPCB=X7 -DPCBREV=T20V2"
+        ;;
+    t12max)
+        BUILD_OPTIONS+=" -DPCB=X7 -DPCBREV=T12MAX"
+        ;;
+    t14)
+        BUILD_OPTIONS+=" -DPCB=X7 -DPCBREV=T14"
         ;;
     lr3pro)
         BUILD_OPTIONS+=" -DPCB=X7 -DPCBREV=LR3PRO"
@@ -81,11 +96,14 @@ case $RADIO_TYPE in
     x10)
         BUILD_OPTIONS+=" -DPCB=X10"
         ;;
-    x10-access)
+    x10express)
         BUILD_OPTIONS+=" -DPCB=X10 -DPCBREV=EXPRESS -DPXX1=YES"
         ;;
     x12s)
         BUILD_OPTIONS+=" -DPCB=X12S"
+        ;;
+    t15)
+        BUILD_OPTIONS+=" -DPCB=X10 -DPCBREV=T15 -DINTERNAL_MODULE_CRSF=ON"
         ;;
     t16)
         BUILD_OPTIONS+=" -DPCB=X10 -DPCBREV=T16 -DINTERNAL_MODULE_MULTI=ON"
@@ -219,6 +237,14 @@ if [[ $PAUSEAFTEREACHLINE == "true" ]]; then
   read
 fi
 
+echo "=== Step $((STEP++)): Building radio simulator library ==="
+make -C native -j`nproc` libsimulator
+check_command $? "make -C native -j`nproc` libsimulator"
+if [[ $PAUSEAFTEREACHLINE == "true" ]]; then
+  echo "Step finished. Please check the output above and press Enter to continue or Ctrl+C to stop."
+  read
+fi
+
 echo "=== Step $((STEP++)): Building Companion ==="
 make -C native -j`nproc` companion
 check_command $? "make -C native -j`nproc` companion"
@@ -230,14 +256,6 @@ fi
 echo "=== Step $((STEP++)): Building Simulator ==="
 make -C native -j`nproc` simulator
 check_command $? "make -C native -j`nproc` simulator"
-if [[ $PAUSEAFTEREACHLINE == "true" ]]; then
-  echo "Step finished. Please check the output above and press Enter to continue or Ctrl+C to stop."
-  read
-fi
-
-echo "=== Step $((STEP++)): Building radio simulator library ==="
-make -C native -j`nproc` libsimulator
-check_command $? "make -C native -j`nproc` libsimulator"
 if [[ $PAUSEAFTEREACHLINE == "true" ]]; then
   echo "Step finished. Please check the output above and press Enter to continue or Ctrl+C to stop."
   read

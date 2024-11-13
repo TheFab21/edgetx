@@ -19,8 +19,7 @@
  * GNU General Public License for more details.
  */
 
-#ifndef OPENTX_OPTIONS_H
-#define OPENTX_OPTIONS_H
+#pragma once
 
 static const char * const options[] = {
 #if defined(AUTOUPDATE)
@@ -86,9 +85,6 @@ static const char * const options[] = {
 #if !defined(OVERRIDE_CHANNEL_FUNCTION)
   "nooverridech",
 #endif
-#if defined(PPM_UNIT_US)
-  "ppmus",
-#endif
 #if defined(NO_RAS)
   "noras",
 #endif
@@ -109,5 +105,3 @@ static const char * const options[] = {
 #endif
   nullptr //sentinel
 };
-
-#endif //OPENTX_OPTIONS_H

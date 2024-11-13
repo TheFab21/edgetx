@@ -25,20 +25,20 @@
 #include "hal/module_port.h"
 
 #include <stdio.h>
-#include "opentx.h"
+#include "edgetx.h"
 #include "multi_firmware_update.h"
 #include "stk500.h"
 #include "debug.h"
 
 #include "timers_driver.h"
-#include "watchdog_driver.h"
+#include "hal/watchdog_driver.h"
 
 #include <memory>
 
 #if defined(LIBOPENUI)
   #include "libopenui.h"
 #else
-  #include "libopenui/src/libopenui_file.h"
+  #include "lib_file.h"
 #endif
 
 #if defined(MULTI_PROTOLIST)
@@ -90,31 +90,25 @@ bool MultiFirmwareUpdateDriver::init()
 {
   if (type == MULTI_TYPE_MULTIMODULE && module == INTERNAL_MODULE) {
     // duplex internal USART
-    mod_st = modulePortInitSerial(INTERNAL_MODULE, ETX_MOD_PORT_UART, &serialInitParams);
+    mod_st = modulePortInitSerial(INTERNAL_MODULE, ETX_MOD_PORT_UART, &serialInitParams, false);
   } else if (type == MULTI_TYPE_MULTIMODULE && module == EXTERNAL_MODULE) {
     // TX on PPM (inverted softserial)
     etx_serial_init params(serialInitParams);
     params.direction = ETX_Dir_TX;
     params.polarity = ETX_Pol_Inverted;
-    mod_st = modulePortInitSerial(EXTERNAL_MODULE, ETX_MOD_PORT_UART, &params);
-    if (!mod_st) {
-      params.polarity = ETX_Pol_Inverted;
-      mod_st = modulePortInitSerial(EXTERNAL_MODULE, ETX_MOD_PORT_SOFT_INV, &params);
-      if (!mod_st) return false;
-    }
+    mod_st = modulePortInitSerial(EXTERNAL_MODULE, ETX_MOD_PORT_UART, &params, true);
+    if (!mod_st) return false;
+
     // RX on S.PORT (inverted softserial)
     params.direction = ETX_Dir_RX;
     params.polarity = ETX_Pol_Inverted;
-    if (!modulePortInitSerial(EXTERNAL_MODULE, ETX_MOD_PORT_SPORT, &params)) {
-      params.polarity = ETX_Pol_Inverted;
-      if (!modulePortInitSerial(EXTERNAL_MODULE, ETX_MOD_PORT_SPORT_INV, &params)) {
-        modulePortDeInit(mod_st);
-        return false;
-      }
+    if (!modulePortInitSerial(EXTERNAL_MODULE, ETX_MOD_PORT_SPORT, &params, true)) {
+      modulePortDeInit(mod_st);
+      return false;
     }
   } else if (type == MULTI_TYPE_ELRS && module == EXTERNAL_MODULE) {
     // half-duplex on S.PORT USART
-    mod_st = modulePortInitSerial(EXTERNAL_MODULE, ETX_MOD_PORT_SPORT, &serialInitParams);
+    mod_st = modulePortInitSerial(EXTERNAL_MODULE, ETX_MOD_PORT_SPORT, &serialInitParams, false);
   }
 
   if (!mod_st) return false;
@@ -187,7 +181,7 @@ bool MultiFirmwareUpdateDriver::checkRxByte(uint8_t byte) const
 const char * MultiFirmwareUpdateDriver::waitForInitialSync()
 {
   uint8_t byte;
-  int retries = 200;
+  tmr10ms_t now = get_tmr10ms();;
 
 #if defined(DEBUG_EXT_MODULE_FLASH)
   TRACE("[Wait for Sync]");
@@ -203,9 +197,9 @@ const char * MultiFirmwareUpdateDriver::waitForInitialSync()
     getRxByte(byte);
     WDG_RESET();
 
-  } while ((byte != STK_INSYNC) && --retries);
+  } while ((byte != STK_INSYNC) && ((get_tmr10ms() - now) < 500)); // 5secs
 
-  if (!retries) {
+  if ((get_tmr10ms() - now) > 500) {
     return STR_DEVICE_NO_RESPONSE;
   }
 

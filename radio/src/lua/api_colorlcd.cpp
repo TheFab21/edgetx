@@ -24,22 +24,23 @@
 #include <cctype>
 #include <cstdio>
 
-#include "opentx.h"
+#include "edgetx.h"
 #include "libopenui.h"
 #include "widget.h"
 
 #include "lua_api.h"
+#include "lua_widget.h"
 #include "api_colorlcd.h"
 
 #define BITMAP_METATABLE "BITMAP*"
 
 constexpr coord_t INVERT_BOX_MARGIN = 2;
-constexpr int8_t text_horizontal_offset[7] {-2,-1,-2,-2,-2,-2,-2};
-constexpr int8_t text_vertical_offset[7] {0,0,0,0,0,-1,7};
+constexpr int8_t text_horizontal_offset[7] = {-2,-1,-2,-2,-2,-2,-2};
+constexpr int8_t text_vertical_offset[7] = {0,0,0,0,0,-1,7};
 
 BitmapBuffer* luaLcdBuffer  = nullptr;
-Widget* runningFS = nullptr;
- 
+LuaWidget *runningFS = nullptr;
+
 static int8_t getTextHorizontalOffset(LcdFlags flags)
 {
   // no need to adjust if not right aligned
@@ -63,16 +64,6 @@ static int8_t getTextVerticalOffset(LcdFlags flags)
   if (flags & VCENTERED)
     vcenter = 0.5 * getFontHeight(flags & 0xFFFF);
   return text_vertical_offset[font_index] - vcenter;
-}
-
-// Return flags with RGB color value instead of indexed theme color
-LcdFlags flagsRGB(LcdFlags flags)
-{
-  // RGB or indexed color?
-  if (flags & RGB_FLAG)
-    return flags;
-  else
-    return (flags & 0xFFFF) | COLOR(COLOR_VAL(flags)) | RGB_FLAG;
 }
 
 /*luadoc
@@ -106,7 +97,7 @@ static int luaLcdClear(lua_State * L)
 {
   if (luaLcdAllowed && luaLcdBuffer) {
     LcdFlags flags = luaL_optunsigned(L, 1, COLOR2FLAGS(COLOR_THEME_SECONDARY3_INDEX));
-    flags = flagsRGB(flags);
+    flags = colorToRGB(flags);
     luaLcdBuffer->clear(flags);
   }
   return 0;
@@ -153,7 +144,7 @@ static int luaLcdDrawPoint(lua_State *L)
   int x = luaL_checkinteger(L, 1);
   int y = luaL_checkinteger(L, 2);
   LcdFlags flags = luaL_optunsigned(L, 3, 0);
-  flags = flagsRGB(flags);
+  flags = colorToRGB(flags);
 
   // drawPixel uses color value directly; hence COLOR_VAL again
   luaLcdBuffer->drawPixel(x, y, COLOR_VAL(flags));
@@ -190,17 +181,17 @@ static int luaLcdDrawLine(lua_State *L)
   coord_t y2 = luaL_checkunsigned(L, 4);
   uint8_t pat = luaL_checkunsigned(L, 5);
   LcdFlags flags = luaL_optunsigned(L, 6, 0);
-  flags = flagsRGB(flags);
+  flags = colorToRGB(flags);
 
   if (x1 > LCD_W || y1 > LCD_H || x2 > LCD_W || y2 > LCD_H)
     return 0;
 
   if (pat == SOLID) {
     if (x1 == x2) {
-      luaLcdBuffer->drawSolidVerticalLine(x1, y1 < y2 ? y1 : y2, y1 < y2 ? (y2 - y1) + 1 : (y1 - y2) + 1, flags);
+      luaLcdBuffer->drawVerticalLine(x1, y1 < y2 ? y1 : y2, y1 < y2 ? (y2 - y1) + 1 : (y1 - y2) + 1, pat, flags);
       return 0;
     } else if (y1 == y2) {
-      luaLcdBuffer->drawSolidHorizontalLine(x1 < x2 ? x1 : x2, y1, x1 < x2 ? (x2 - x1) + 1 : (x1 - x2) + 1, flags);
+      luaLcdBuffer->drawHorizontalLine(x1 < x2 ? x1 : x2, y1, x1 < x2 ? (x2 - x1) + 1 : (x1 - x2) + 1, pat, flags);
       return 0;
     }
   }
@@ -229,13 +220,13 @@ static void drawString(lua_State *L, const char * s, LcdFlags flags)
 
   if (invers) {
     // Find inverse color or read from optional Lua argument
-    LcdFlags color = flagsRGB(flags);
+    LcdFlags color = colorToRGB(flags);
     LcdFlags invColor = luaL_optunsigned(L, 5, ~0u); // ~0 is impossible for color flag!
     if (invColor == ~0u) {
       RGB_SPLIT(COLOR_VAL(color), r, g, b);
       invColor = COLOR2FLAGS(RGB_JOIN(31 - r, 63 - g, 31 - b));
     } else
-      invColor = flagsRGB(invColor);
+      invColor = colorToRGB(invColor);
     flags = (flags & 0xFFFF) | invColor;
     
     // Draw color box
@@ -253,7 +244,7 @@ static void drawString(lua_State *L, const char * s, LcdFlags flags)
       return;
     if (flags & SHADOWED)
       luaLcdBuffer->drawText(x+1, y+1, s, flags & 0xFFFF); // force black
-    flags = (flags & 0xFFFF) | flagsRGB(flags);
+    flags = (flags & 0xFFFF) | colorToRGB(flags);
   }
   
   luaLcdBuffer->drawText(x, y, s, flags);
@@ -317,7 +308,9 @@ Draw text inside rectangle (x,y,w,h) with line breaks
 
 @param flags (optional) please see [Lcd functions overview](../lcd-functions-less-than-greater-than-luadoc-begin-lcd/lcd_functions-overview.html) for drawing flags and colors, and [Appendix](../../part_vii_-_appendix/fonts.md) for available characters in each font set. RIGHT, CENTER and VCENTER are not implemented.
 
-@status current Introduced in 2.5.0
+@retval x,y (integers) point where text drawing ended
+
+@status current Introduced in 2.5.0, return x,y added in 2.11.0
 */
 static int luaLcdDrawTextLines(lua_State *L)
 {
@@ -328,6 +321,7 @@ static int luaLcdDrawTextLines(lua_State *L)
   int y = luaL_checkinteger(L, 2);
   int w = luaL_checkinteger(L, 3);
   int h = luaL_checkinteger(L, 4);
+  point_t maxP = {0,0};
   const char * s = luaL_checkstring(L, 5);
   LcdFlags flags = luaL_optunsigned(L, 6, 0);
   
@@ -337,13 +331,13 @@ static int luaLcdDrawTextLines(lua_State *L)
 
   if (invers) {
     // Find inverse color or read from optional Lua argument
-    LcdFlags color = flagsRGB(flags);
+    LcdFlags color = colorToRGB(flags);
     LcdFlags invColor = luaL_optunsigned(L, 7, ~0u); // ~0 is impossible for color flag!
     if (invColor == ~0u) {
       RGB_SPLIT(COLOR_VAL(color), r, g, b);
       invColor = COLOR2FLAGS(RGB_JOIN(31 - r, 63 - g, 31 - b));
     } else
-      invColor = flagsRGB(invColor);
+      invColor = colorToRGB(invColor);
     flags = (flags & 0xFFFF) | invColor;
     
     // Draw color box
@@ -352,12 +346,18 @@ static int luaLcdDrawTextLines(lua_State *L)
     if ((flags & BLINK) && !BLINK_ON_PHASE)
       return 0;
     if (flags & SHADOWED)
-      drawTextLines(luaLcdBuffer, x+1, y+1, w, h, s, flags & 0xFFFF); // force black
-    flags = (flags & 0xFFFF) | flagsRGB(flags);
+      luaLcdBuffer->drawTextLines(x+1, y+1, w, h, s, flags & 0xFFFF); // force black
+    flags = (flags & 0xFFFF) | colorToRGB(flags);
   }
   
-  drawTextLines(luaLcdBuffer, x, y, w, h, s, flags);
-  return 0;
+  maxP = luaLcdBuffer->drawTextLines(x, y, w, h, s, flags);
+  if (!invers && flags & SHADOWED) {
+    maxP.x++;
+    maxP.y++;
+  }
+  lua_pushinteger(L, maxP.x);
+  lua_pushinteger(L, maxP.y);
+  return 2;
 }
 
 /*luadoc
@@ -407,7 +407,7 @@ static int luaLcdDrawNumber(lua_State *L)
   char s[49];
   int val = luaL_checkinteger(L, 3);
   LcdFlags flags = luaL_optunsigned(L, 4, 0);
-  BitmapBuffer::formatNumberAsString(s, 49, val, flags & 0xFFFF);
+  formatNumberAsString(s, 49, val, flags & 0xFFFF);
   drawString(L, s, flags);
   return 0;
 }
@@ -446,9 +446,9 @@ static int luaLcdDrawChannel(lua_State *L)
     }
   }
   LcdFlags flags = luaL_optunsigned(L, 4, 0);
-  flags = flagsRGB(flags);
+  flags = colorToRGB(flags);
   getvalue_t value = getValue(channel);
-  drawSensorCustomValue(luaLcdBuffer, x, y, (channel-MIXSRC_FIRST_TELEM)/3, value, flags);
+  luaLcdBuffer->drawSensorCustomValue(x, y, (channel-MIXSRC_FIRST_TELEM)/3, value, flags);
 
   return 0;
 }
@@ -476,8 +476,8 @@ static int luaLcdDrawSwitch(lua_State *L)
   int y = luaL_checkinteger(L, 2);
   int s = luaL_checkinteger(L, 3);
   LcdFlags flags = luaL_optunsigned(L, 4, 0);
-  flags = flagsRGB(flags);
-  drawSwitch(luaLcdBuffer, x, y, s, flags);
+  flags = colorToRGB(flags);
+  luaLcdBuffer->drawSwitch(x, y, s, flags);
 
   return 0;
 }
@@ -504,8 +504,8 @@ static int luaLcdDrawSource(lua_State *L)
   int y = luaL_checkinteger(L, 2);
   int s = luaL_checkinteger(L, 3);
   LcdFlags flags = luaL_optunsigned(L, 4, 0);
-  flags = flagsRGB(flags);
-  drawSource(luaLcdBuffer, x, y, s, flags);
+  flags = colorToRGB(flags);
+  luaLcdBuffer->drawSource(x, y, s, flags);
 
   return 0;
 }
@@ -758,8 +758,8 @@ static int luaLcdDrawBitmapPattern(lua_State *L)
     auto x = luaL_checkunsigned(L, 2);
     auto y = luaL_checkunsigned(L, 3);
     auto flags = luaL_optunsigned(L, 4, 0);
-    flags = flagsRGB(flags);
-    luaLcdBuffer->drawBitmapPattern(x, y, reinterpret_cast<const uint8_t*>(m), flags);
+    flags = colorToRGB(flags);
+    luaLcdBuffer->drawBitmapPattern(x, y, reinterpret_cast<const MaskBitmap*>(m), flags);
   }
 
   return 0;
@@ -797,8 +797,8 @@ static int luaLcdDrawBitmapPatternPie(lua_State *L)
     auto startAngle = luaL_checkinteger(L, 4);
     auto endAngle = luaL_checkinteger(L, 5);
     auto flags = luaL_optunsigned(L, 6, 0);
-    flags = flagsRGB(flags);
-    luaLcdBuffer->drawBitmapPatternPie(x, y, reinterpret_cast<const uint8_t*>(m), flags, startAngle, endAngle);
+    flags = colorToRGB(flags);
+    luaLcdBuffer->drawBitmapPatternPie(x, y, reinterpret_cast<const MaskBitmap*>(m), flags, startAngle, endAngle);
   }
 
   return 0;
@@ -833,7 +833,7 @@ static int luaLcdDrawRectangle(lua_State *L)
   int h = luaL_checkinteger(L, 4);
 
   LcdFlags flags = luaL_optunsigned(L, 5, 0);
-  flags = flagsRGB(flags);
+  flags = colorToRGB(flags);
   unsigned int t = luaL_optunsigned(L, 6, 1);
   uint8_t opacity = luaL_optunsigned(L, 7, 0) & 0x0F;
 
@@ -870,7 +870,7 @@ static int luaLcdDrawFilledRectangle(lua_State *L)
   int h = luaL_checkinteger(L, 4);
 
   LcdFlags flags = luaL_optunsigned(L, 5, 0);
-  flags = flagsRGB(flags);
+  flags = colorToRGB(flags);
   uint8_t opacity = luaL_optunsigned(L, 6, 0) & 0x0F;
   
   luaLcdBuffer->drawFilledRect(x, y, w, h, SOLID, flags, opacity);
@@ -905,7 +905,7 @@ static int luaLcdInvertRect(lua_State *L)
   int h = luaL_checkinteger(L, 4);
 
   LcdFlags flags = luaL_optunsigned(L, 5, 0);
-  flags = flagsRGB(flags);
+  flags = colorToRGB(flags);
 
   luaLcdBuffer->invertRect(x, y, w, h, flags);
 
@@ -943,7 +943,7 @@ static int luaLcdDrawGauge(lua_State *L)
   int num = luaL_checkinteger(L, 5);
   int den = luaL_checkinteger(L, 6);
   LcdFlags flags = luaL_optunsigned(L, 7, 0);
-  flags = flagsRGB(flags);
+  flags = colorToRGB(flags);
   
   luaLcdBuffer->drawRect(x, y, w, h, 1, 0xff, flags);
   uint16_t len = limit((uint16_t)1, uint16_t(w*num/den), uint16_t(w));
@@ -966,12 +966,11 @@ Please notice that changing theme colors affects not only other Lua widgets, but
 static int luaLcdSetColor(lua_State *L)
 {
   unsigned int index = COLOR_VAL(luaL_checkunsigned(L, 1));
-  uint16_t color = COLOR_VAL(flagsRGB(luaL_checkunsigned(L, 2)));
+  uint16_t color = COLOR_VAL(colorToRGB(luaL_checkunsigned(L, 2)));
 
   if (index < LCD_COLOR_COUNT && lcdColorTable[index] != color) {
     lcdColorTable[index] = color;
-    if (index != CUSTOM_COLOR_INDEX)
-      EdgeTxTheme::instance()->update(false);
+    styles->applyColors();
   }
   return 0;
 }
@@ -994,7 +993,7 @@ static int luaLcdGetColor(lua_State *L)
 {
   LcdFlags flags = luaL_checkunsigned(L, 1);
   if ((flags & RGB_FLAG) || (COLOR_VAL(flags) & 0xFF) < LCD_COLOR_COUNT)
-    lua_pushunsigned(L, flagsRGB(flags) & (COLOR_MASK(~0u) | RGB_FLAG));
+    lua_pushunsigned(L, colorToRGB(flags) & (COLOR_MASK(~0u) | RGB_FLAG));
   else
     lua_pushnil(L);
   return 1;
@@ -1058,7 +1057,7 @@ static int luaLcdDrawCircle(lua_State *L)
   coord_t y = luaL_checkunsigned(L, 2);
   coord_t r = luaL_checkunsigned(L, 3);
   LcdFlags flags = luaL_optunsigned(L, 4, 0);
-  flags = flagsRGB(flags);
+  flags = colorToRGB(flags);
 
   luaLcdBuffer->drawCircle(x, y, r, flags);
 
@@ -1087,7 +1086,7 @@ static int luaLcdDrawFilledCircle(lua_State *L)
   coord_t y = luaL_checkunsigned(L, 2);
   coord_t r = luaL_checkunsigned(L, 3);
   LcdFlags flags = luaL_optunsigned(L, 4, 0);
-  flags = flagsRGB(flags);
+  flags = colorToRGB(flags);
 
   luaLcdBuffer->drawFilledCircle(x, y, r, flags);
 
@@ -1117,7 +1116,7 @@ static int luaLcdDrawTriangle(lua_State *L)
   coord_t x3 = luaL_checkunsigned(L, 5);
   coord_t y3 = luaL_checkunsigned(L, 6);
   LcdFlags flags = luaL_optunsigned(L, 7, 0);
-  flags = flagsRGB(flags);
+  flags = colorToRGB(flags);
 
   luaLcdBuffer->drawLine(x1, y1, x2, y2, SOLID, flags);
   luaLcdBuffer->drawLine(x2, y2, x3, y3, SOLID, flags);
@@ -1149,7 +1148,7 @@ static int luaLcdDrawFilledTriangle(lua_State *L)
   coord_t x3 = luaL_checkunsigned(L, 5);
   coord_t y3 = luaL_checkunsigned(L, 6);
   LcdFlags flags = luaL_optunsigned(L, 7, 0);
-  flags = flagsRGB(flags);
+  flags = colorToRGB(flags);
 
   luaLcdBuffer->drawFilledTriangle(x1, y1, x2, y2, x3, y3, flags);
 
@@ -1182,7 +1181,7 @@ static int luaLcdDrawArc(lua_State *L)
   int start = luaL_checkunsigned(L, 4);
   int end = luaL_checkunsigned(L, 5);
   LcdFlags flags = luaL_optunsigned(L, 6, 0);
-  flags = flagsRGB(flags);
+  flags = colorToRGB(flags);
 
   if (r > 0)
     luaLcdBuffer->drawAnnulusSector(x, y, r - 1, r, start, end, flags);
@@ -1216,7 +1215,7 @@ static int luaLcdDrawPie(lua_State *L)
   int start = luaL_checkunsigned(L, 4);
   int end = luaL_checkunsigned(L, 5);
   LcdFlags flags = luaL_optunsigned(L, 6, 0);
-  flags = flagsRGB(flags);
+  flags = colorToRGB(flags);
 
   if (r > 0)
     luaLcdBuffer->drawAnnulusSector(x, y, 0, r, start, end, flags);
@@ -1251,7 +1250,7 @@ static int luaLcdDrawAnnulus(lua_State *L)
   int start = luaL_checkunsigned(L, 5);
   int end = luaL_checkunsigned(L, 6);
   LcdFlags flags = luaL_optunsigned(L, 7, 0);
-  flags = flagsRGB(flags);
+  flags = colorToRGB(flags);
 
   luaLcdBuffer->drawAnnulusSector(x, y, r1, r2, start, end, flags);
 
@@ -1288,7 +1287,7 @@ static int luaLcdDrawLineWithClipping(lua_State *L)
   coord_t ymax = luaL_checkunsigned(L, 8);
   uint8_t pat = luaL_checkunsigned(L, 9);
   LcdFlags flags = luaL_optunsigned(L, 10, 0);
-  flags = flagsRGB(flags);
+  flags = colorToRGB(flags);
 
   // backup clipping rect
   coord_t dc_xmin; coord_t dc_xmax; coord_t dc_ymin; coord_t dc_ymax;
@@ -1338,7 +1337,7 @@ static void drawHudRectangle(BitmapBuffer * dc, float pitch, float roll, coord_t
         coord_t yy = ymin + s;
         coord_t xx = ox + ((float)yy - oy) / angle; // + 0.5f; rounding not needed
         if (xx >= xmin && xx <= xmax) {
-          dc->drawSolidHorizontalLine(xx, yy, xmax - xx + 1, flags);
+          dc->drawHorizontalLine(xx, yy, xmax - xx + 1, SOLID, flags);
         }
         else if (xx < xmin) {
           ybot = (inverted) ? max(yy, ybot) + 1 : min(yy, ybot);
@@ -1351,7 +1350,7 @@ static void drawHudRectangle(BitmapBuffer * dc, float pitch, float roll, coord_t
         coord_t yy = ymin + s;
         coord_t xx = ox + ((float)yy - oy) / angle; // + 0.5f; rounding not needed
         if (xx >= xmin && xx <= xmax) {
-          dc->drawSolidHorizontalLine(xmin, yy, xx - xmin, flags);
+          dc->drawHorizontalLine(xmin, yy, xx - xmin, SOLID, flags);
         }
         else if (xx > xmax) {
           ybot = (inverted) ? max(yy, ybot) + 1 : min(yy, ybot);
@@ -1393,7 +1392,7 @@ static int luaLcdDrawHudRectangle(lua_State *L)
   coord_t ymin = luaL_checkunsigned(L, 5);
   coord_t ymax = luaL_checkunsigned(L, 6);
   LcdFlags flags = luaL_optunsigned(L, 7, 0);
-  flags = flagsRGB(flags);
+  flags = colorToRGB(flags);
 
   drawHudRectangle(luaLcdBuffer, pitch, roll, xmin, xmax, ymin, ymax, flags);
 
@@ -1411,11 +1410,8 @@ Exit full screen widget mode.
 */
 static int luaLcdExitFullScreen(lua_State *L)
 {
-  if (runningFS) {
-    Widget* rfs = runningFS;
-    runningFS = nullptr;
-    rfs->setFullscreen(false);
-  }
+  if (runningFS)
+    runningFS->closeFullscreen();
   return 0;
 }
 

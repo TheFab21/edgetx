@@ -19,8 +19,7 @@
  * GNU General Public License for more details.
  */
 
-#ifndef _SIMPGMSPACE_H_
-#define _SIMPGMSPACE_H_
+#pragma once
 
 #include <unistd.h>
 #define sleep(x) usleep(1000*x)
@@ -39,10 +38,7 @@ extern uint8_t * eeprom;
 #define __disable_irq()
 #define __enable_irq()
 
-extern uint8_t simu_start_mode;
 extern char * main_thread_error;
-
-#define OPENTX_START_DEFAULT_ARGS  simu_start_mode
 
 
 uint64_t simuTimerMicros(void);
@@ -76,19 +72,8 @@ void simuMain();
 
 #define configure_pins(...)
 
-#if defined(SDCARD) && !defined(SKIP_FATFS_DECLARATION) && !defined(SIMU_DISKIO)
+#if !defined(SKIP_FATFS_DECLARATION) && !defined(SIMU_DISKIO)
   #define SIMU_USE_SDCARD
-#endif
-
-#if defined(SIMU_DISKIO)
-  uint32_t sdMounted();
-  #define sdPoll10ms()
-  void sdInit(void);
-  void sdDone(void);
-#else
-  #define sdPoll10ms()
-  uint32_t sdMounted(void);
-  #define sdMounted()      (true)
 #endif
 
 #if defined(SIMU_USE_SDCARD)
@@ -108,5 +93,3 @@ void simuMain();
   extern struct TouchState simTouchState;
   extern bool simTouchOccured;
 #endif
-
-#endif // _SIMPGMSPACE_H_

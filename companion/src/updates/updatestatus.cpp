@@ -36,17 +36,14 @@ void UpdateStatus::reportProgress(QString text, QtMsgType type)
   if (m_logLevel == QtDebugMsg ||
      (m_logLevel == QtInfoMsg && type > QtDebugMsg) ||
      (type < QtInfoMsg && type >= m_logLevel)) {
-    if (m_progress) {
+    if (m_progress)
       m_progress->addMessage(text, type);
-      if (m_logLevel == QtDebugMsg)
-        qDebug() << text;
-    }
     else
       qDebug() << text;
   }
 
-  if (type == QtCriticalMsg || type == QtFatalMsg)
-    criticalMsg(text);
+  if (type == QtFatalMsg)
+    fatalMsg(text);
 }
 
 void UpdateStatus::progressMessage(QString text)
@@ -57,8 +54,21 @@ void UpdateStatus::progressMessage(QString text)
     qDebug() << text;
 }
 
-void UpdateStatus::criticalMsg(QString msg)
+void UpdateStatus::fatalMsg(QString msg)
 {
   QMessageBox::critical(m_progress, tr("Update Interface"), msg);
 }
 
+void UpdateStatus::setProgress(ProgressWidget * progress)
+{
+  m_progress = progress;
+  if (m_progress) {
+    disconnect(m_progress, &ProgressWidget::stopped, this, &UpdateStatus::onWidgetStopped); // to avoid duplicate entries in stack
+    connect(m_progress, &ProgressWidget::stopped, this, &UpdateStatus::onWidgetStopped);
+  }
+}
+
+void UpdateStatus::onWidgetStopped()
+{
+  emit cancelled();
+}

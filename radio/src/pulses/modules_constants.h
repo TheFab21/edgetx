@@ -19,8 +19,7 @@
  * GNU General Public License for more details.
  */
 
-#ifndef _MODULES_CONSTANTS_H_
-#define _MODULES_CONSTANTS_H_
+#pragma once
 
 #include "storage/yaml/yaml_defs.h"
 
@@ -40,7 +39,8 @@ enum ModuleType {
   MODULE_TYPE_R9M_LITE_PRO_PXX2,
   MODULE_TYPE_SBUS,
   MODULE_TYPE_XJT_LITE_PXX2,
-  MODULE_TYPE_FLYSKY,
+  MODULE_TYPE_FLYSKY_AFHDS2A,
+  MODULE_TYPE_FLYSKY_AFHDS3,
   MODULE_TYPE_LEMON_DSMP,
   MODULE_TYPE_COUNT SKIP,
   MODULE_TYPE_MAX SKIP = MODULE_TYPE_COUNT - 1
@@ -132,11 +132,6 @@ enum ModuleSubtypeDSM2 {
   DSM2_PROTO_DSMX,
 };
 
-enum ModuleSubtypeFlysky {
-  FLYSKY_SUBTYPE_AFHDS3=0,
-  FLYSKY_SUBTYPE_AFHDS2A
-};
-
 enum FailsafeModes {
   FAILSAFE_NOT_SET,
   FAILSAFE_HOLD,
@@ -163,5 +158,3 @@ enum AfhdsModes {
   AFHDS_SUBTYPE_PPM_SBUS,
   AFHDS_SUBTYPE_LAST = AFHDS_SUBTYPE_PPM_SBUS
 };
-
-#endif // _MODULES_CONSTANTS_H_

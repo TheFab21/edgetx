@@ -1,7 +1,8 @@
 /*
- * Copyright (C) OpenTX
+ * Copyright (C) EdgeTX
  *
  * Based on code named
+ *   opentx - https://github.com/opentx/opentx
  *   th9x - http://code.google.com/p/th9x
  *   er9x - http://code.google.com/p/er9x
  *   gruvin9x - http://code.google.com/p/gruvin9x
@@ -29,8 +30,9 @@
   #undef main
 #endif
 
+#include <AppDebugMessageHandler>
+
 #include "appdata.h"
-#include "appdebugmessagehandler.h"
 #include "constants.h"
 #include "customdebug.h"
 #include "eeprominterface.h"
@@ -40,6 +42,7 @@
 #include "storage.h"
 #include "translations.h"
 #include "version.h"
+#include "boardfactories.h"
 
 using namespace Simulator;
 
@@ -50,9 +53,9 @@ void showMessage(const QString & message, enum QMessageBox::Icon icon = QMessage
 {
   if (useConsole) {
     if (icon < QMessageBox::Warning)
-      QTextStream(stdout) << message << endl;
+      QTextStream(stdout) << message << Qt::endl;
     else
-      QTextStream(stderr) << message << endl;
+      QTextStream(stderr) << message << Qt::endl;
 
     return;
   }
@@ -69,16 +72,16 @@ const QString sharedHelpText()
   QString ret;
   QTextStream stream(&ret);
   // list all available profiles
-  stream << endl << QApplication::translate("SimulatorMain", "Available profiles:") << endl;
+  stream << Qt::endl << QApplication::translate("SimulatorMain", "Available profiles:") << Qt::endl;
   QMapIterator<int, QString> pi(g.getActiveProfiles());
   while (pi.hasNext()) {
     pi.next();
-    stream << "\t" << QApplication::translate("SimulatorMain", "ID: ") << pi.key() << "; " << QApplication::translate("SimulatorMain", "Name: ") << pi.value() << endl;
+    stream << "\t" << QApplication::translate("SimulatorMain", "ID: ") << pi.key() << "; " << QApplication::translate("SimulatorMain", "Name: ") << pi.value() << Qt::endl;
   }
   // list all available radios
-  stream << endl << QApplication::translate("SimulatorMain", "Available radios:") << endl;
+  stream << Qt::endl << QApplication::translate("SimulatorMain", "Available radios:") << Qt::endl;
   foreach(QString name, SimulatorLoader::getAvailableSimulators()) {
-    stream << "\t" << name << endl;
+    stream << "\t" << name << Qt::endl;
   }
   return ret;
 }
@@ -275,6 +278,8 @@ int main(int argc, char *argv[])
   }
 #endif
 
+  Q_INIT_RESOURCE(hwdefs);
+  gBoardFactories = new BoardFactories();
   registerStorageFactories();
   registerOpenTxFirmwares();
   SimulatorLoader::registerSimulators();
@@ -292,7 +297,7 @@ int main(int argc, char *argv[])
     simOptions.firmwareId = g.profile[profileId].fwType();
   }
 
-  // do not used saved simulatorId always refresh
+  // DO NOT use saved simulatorId as could be changed in later releases
   simOptions.simulatorId = SimulatorLoader::findSimulatorByName(Firmware::getFirmwareForId(simOptions.firmwareId)->getSimulatorId());
 
   if (simOptions.dataFolder.isEmpty())
@@ -342,6 +347,11 @@ int main(int argc, char *argv[])
   g.sessionId(profileId);
   g.simuLastProfId(profileId);
 
+  // TODO: fix this in Firmware and Boards refactor
+  // Append a dummy variant to firmware name to force the Board Type to be registered
+  Firmware * simfw = Firmware::getFirmwareForId(simOptions.firmwareId + "-simulator");
+  delete simfw;
+
   // Set global firmware environment
   Firmware::setCurrentVariant(Firmware::getFirmwareForId(simOptions.firmwareId));
   //qDebug() << "current firmware:" << getCurrentFirmware()->getId();
@@ -374,6 +384,7 @@ int finish(int exitCode)
   SimulatorLoader::unregisterSimulators();
   unregisterOpenTxFirmwares();
   unregisterStorageFactories();
+  gBoardFactories->unregisterBoardFactories();
 
 #if defined(JOYSTICKS) || defined(SIMU_AUDIO)
   SDL_Quit();

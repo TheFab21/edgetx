@@ -19,20 +19,21 @@
  * GNU General Public License for more details.
  */
 
-#ifndef _BOARD_H_
-#define _BOARD_H_
+#pragma once
 
 #include "definitions.h"
-#include "opentx_constants.h"
+#include "edgetx_constants.h"
 
 // Defines used in board_common.h
 #define ROTARY_ENCODER_NAVIGATION
 
+#define BOOTLOADER_KEYS 0x42
+
 #include "board_common.h"
 #include "hal.h"
-#include "hal/serial_port.h"
 
-#include "watchdog_driver.h"
+#include "hal/serial_port.h"
+#include "hal/watchdog_driver.h"
 
 #if defined(HARDWARE_TOUCH)
 #include "tp_gt911.h"
@@ -47,8 +48,12 @@ PACK(typedef struct {
 extern HardwareOptions hardwareOptions;
 
 #define FLASHSIZE                      0x200000
+#define FLASH_PAGESIZE                 256
 #define BOOTLOADER_SIZE                0x20000
 #define FIRMWARE_ADDRESS               0x08000000
+#define FIRMWARE_LEN(fsize)            (fsize - BOOTLOADER_SIZE)
+#define FIRMWARE_MAX_LEN               (FLASHSIZE - BOOTLOADER_SIZE)
+#define APP_START_ADDRESS              (uint32_t)(FIRMWARE_ADDRESS + BOOTLOADER_SIZE)
 
 #define MB                             *1024*1024
 #define LUA_MEM_EXTRA_MAX              (2 MB)    // max allowed memory usage for Lua bitmaps (in bytes)
@@ -72,6 +77,10 @@ enum {
   // X10
   PCBREV_X10_STD = 0,
   PCBREV_X10_EXPRESS = 3,
+
+  //T15
+  PCBREV_T15_STD = 0,
+  PCBREV_T15_IPS = 1,
 };
 
 #if defined(SIMU)
@@ -79,7 +88,7 @@ enum {
 #elif defined(PCBX10)
   #if defined(PCBREV_EXPRESS)
     #define IS_FIRMWARE_COMPATIBLE_WITH_BOARD() (hardwareOptions.pcbrev == PCBREV_X10_EXPRESS)
-  #elif defined(RADIO_FAMILY_T16)
+  #elif defined(RADIO_FAMILY_T16) || defined(RADIO_F16)
     #define IS_FIRMWARE_COMPATIBLE_WITH_BOARD() (true)
   #else
     #define IS_FIRMWARE_COMPATIBLE_WITH_BOARD() (hardwareOptions.pcbrev == PCBREV_X10_STD)
@@ -91,40 +100,6 @@ enum {
     #define IS_FIRMWARE_COMPATIBLE_WITH_BOARD() (hardwareOptions.pcbrev == PCBREV_X12S_LT13)
   #endif
 #endif
-
-// SD driver
-#define BLOCK_SIZE                     512 /* Block Size in Bytes */
-#if !defined(SIMU) || defined(SIMU_DISKIO)
-uint32_t sdIsHC();
-uint32_t sdGetSpeed();
-#define SD_IS_HC()                     (sdIsHC())
-#define SD_GET_SPEED()                 (sdGetSpeed())
-#define SD_GET_FREE_BLOCKNR()          (sdGetFreeSectors())
-#define SD_CARD_PRESENT()              (~SD_PRESENT_GPIO->IDR & SD_PRESENT_GPIO_PIN)
-void sdInit();
-void sdMount();
-void sdDone();
-#define sdPoll10ms()
-uint32_t sdMounted();
-#else
-#define SD_IS_HC()                     (0)
-#define SD_GET_SPEED()                 (0)
-#define sdInit()
-#define sdMount()
-#define sdDone()
-#define SD_CARD_PRESENT()              true
-#endif
-
-// Flash Write driver
-#define FLASH_PAGESIZE                 256
-void unlockFlash();
-void lockFlash();
-void flashWrite(uint32_t * address, const uint32_t * buffer);
-uint32_t isFirmwareStart(const uint8_t * buffer);
-uint32_t isBootloaderStart(const uint8_t * buffer);
-
-// SDRAM driver
-void SDRAM_Init();
 
 #if defined(INTERNAL_MODULE_PXX1) || defined(INTERNAL_MODULE_PXX2)
   #define HARDWARE_INTERNAL_RAS
@@ -141,21 +116,20 @@ void SDRAM_Init();
 //
 #define INTERNAL_MODULE_ON()                                  \
   do {                                                        \
-    GPIO_SetBits(INTMODULE_PWR_GPIO, INTMODULE_PWR_GPIO_PIN); \
+    gpio_set(INTMODULE_PWR_GPIO);			      \
     delay_ms(1);                                              \
   } while (0)
 
 #else
 
 // Just turn the modue ON for all other targets
-#define INTERNAL_MODULE_ON() \
-  GPIO_SetBits(INTMODULE_PWR_GPIO, INTMODULE_PWR_GPIO_PIN)
+#define INTERNAL_MODULE_ON()    gpio_set(INTMODULE_PWR_GPIO)
 
 #endif
 
-#define INTERNAL_MODULE_OFF()   GPIO_ResetBits(INTMODULE_PWR_GPIO, INTMODULE_PWR_GPIO_PIN)
-#define EXTERNAL_MODULE_ON()    GPIO_SetBits(EXTMODULE_PWR_GPIO, EXTMODULE_PWR_GPIO_PIN)
-#define EXTERNAL_MODULE_OFF()   GPIO_ResetBits(EXTMODULE_PWR_GPIO, EXTMODULE_PWR_GPIO_PIN)
+#define INTERNAL_MODULE_OFF()   gpio_clear(INTMODULE_PWR_GPIO)
+#define EXTERNAL_MODULE_ON()    gpio_set(EXTMODULE_PWR_GPIO)
+#define EXTERNAL_MODULE_OFF()   gpio_clear(EXTMODULE_PWR_GPIO)
 
 #if !defined(PXX2)
   #define IS_PXX2_INTERNAL_ENABLED()            (false)
@@ -170,12 +144,8 @@ void SDRAM_Init();
   #define IS_PXX1_INTERNAL_ENABLED()            (true)
 #endif
 
-#if !defined(NUM_FUNCTIONS_SWITCHES)
-#define NUM_FUNCTIONS_SWITCHES        0
-#endif
-
 // POTS and SLIDERS default configuration
-#if defined(RADIO_TX16S)
+#if defined(RADIO_TX16S) || defined(RADIO_F16) || defined(RADIO_V16)
 #define XPOS_CALIB_DEFAULT  {0x3, 0xc, 0x15, 0x1e, 0x26}
 #endif
 
@@ -184,6 +154,10 @@ void SDRAM_Init();
 #define NUM_TRIMS_KEYS                          (NUM_TRIMS * 2)
 
 // Battery driver
+#if defined(RADIO_T15)
+#define VOLTAGE_DROP 65
+#endif
+
 #if defined(PCBX10)
   // Lipo 2S
   #define BATTERY_WARN      66 // 6.6V
@@ -196,8 +170,8 @@ void SDRAM_Init();
   #define BATTERY_MAX       115 // 11.5V
 #endif
 
-bool UNEXPECTED_SHUTDOWN();
-void SET_POWER_REASON(uint32_t value);
+// bool UNEXPECTED_SHUTDOWN();
+// void SET_POWER_REASON(uint32_t value);
 
 #if defined(__cplusplus) && !defined(SIMU)
 extern "C" {
@@ -223,6 +197,10 @@ uint32_t pwrPressedDuration();
 void usbChargerInit();
 bool usbChargerLed();
 
+#if defined(RADIO_V16)
+  uint16_t getSixPosAnalogValue(uint16_t adcValue);
+#endif
+
 // Led driver
 void ledInit();
 void ledOff();
@@ -233,20 +211,12 @@ void ledBlue();
 #endif
 
 // LCD driver
-#define LCD_W                          480
-#define LCD_H                          272
-#define LCD_PHYS_H                     LCD_H
-#define LCD_PHYS_W                     LCD_W
-#define LCD_DEPTH                      16
+
+void lcdSetInitalFrameBuffer(void* fbAddress);
 
 void lcdInit();
 void lcdCopy(void * dest, void * src);
 
-void DMAFillRect(uint16_t * dest, uint16_t destw, uint16_t desth, uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color);
-void DMACopyBitmap(uint16_t * dest, uint16_t destw, uint16_t desth, uint16_t x, uint16_t y, const uint16_t * src, uint16_t srcw, uint16_t srch, uint16_t srcx, uint16_t srcy, uint16_t w, uint16_t h);
-void DMACopyAlphaBitmap(uint16_t * dest, uint16_t destw, uint16_t desth, uint16_t x, uint16_t y, const uint16_t * src, uint16_t srcw, uint16_t srch, uint16_t srcx, uint16_t srcy, uint16_t w, uint16_t h);
-void DMACopyAlphaMask(uint16_t * dest, uint16_t destw, uint16_t desth, uint16_t x, uint16_t y, const uint8_t * src, uint16_t srcw, uint16_t srch, uint16_t srcx, uint16_t srcy, uint16_t w, uint16_t h, uint16_t bg_color);
-void DMABitmapConvert(uint16_t * dest, const uint8_t * src, uint16_t w, uint16_t h, uint32_t format);
 
 #define lcdOff()              backlightEnable(0) /* just disable the backlight */
 
@@ -257,7 +227,7 @@ void DMABitmapConvert(uint16_t * dest, const uint8_t * src, uint16_t w, uint16_t
 #define BACKLIGHT_FORCED_ON     BACKLIGHT_LEVEL_MAX + 1
 #if defined(PCBX12S)
 #define BACKLIGHT_LEVEL_MIN   5
-#elif defined(RADIO_FAMILY_T16)
+#elif defined(RADIO_FAMILY_T16) || defined(RADIO_X10E)
 #define BACKLIGHT_LEVEL_MIN   1
 #else
 #define BACKLIGHT_LEVEL_MIN   46
@@ -269,47 +239,20 @@ void backlightEnable(uint8_t dutyCycle);
 void backlightFullOn();
 bool isBacklightEnabled();
 
-#define BACKLIGHT_ENABLE()                                               \
-  {                                                                      \
-    boardBacklightOn = true;                                             \
-    backlightEnable(globalData.unexpectedShutdown                        \
-                        ? BACKLIGHT_LEVEL_MAX                            \
-                        : BACKLIGHT_LEVEL_MAX - currentBacklightBright); \
-  }
-#define BACKLIGHT_DISABLE()                                                 \
-  {                                                                         \
-    boardBacklightOn = false;                                               \
-    backlightEnable(globalData.unexpectedShutdown ? BACKLIGHT_LEVEL_MAX     \
-                    : ((g_eeGeneral.blOffBright == BACKLIGHT_LEVEL_MIN) &&  \
-                       (g_eeGeneral.backlightMode != e_backlight_mode_off)) \
-                        ? 0                                                 \
-                        : g_eeGeneral.blOffBright);                         \
+#define BACKLIGHT_ENABLE()                                         \
+  {                                                                \
+    boardBacklightOn = true;                                       \
+    backlightEnable(BACKLIGHT_LEVEL_MAX - currentBacklightBright); \
   }
 
-#if !defined(SIMU)
-void usbJoystickUpdate();
-#endif
-#if defined(PCBX12S)
-  #define USB_NAME                     "FrSky Horus"
-  #define USB_MANUFACTURER             'F', 'r', 'S', 'k', 'y', ' ', ' ', ' '  /* 8 bytes */
-  #define USB_PRODUCT                  'H', 'o', 'r', 'u', 's', ' ', ' ', ' '  /* 8 Bytes */
-#elif defined(RADIO_T16)
-  #define USB_NAME                     "Jumper T16"
-  #define USB_MANUFACTURER             'J', 'u', 'm', 'p', 'e', 'r', ' ', ' '  /* 8 bytes */
-  #define USB_PRODUCT                  'T', '1', '6', ' ', ' ', ' ', ' ', ' '  /* 8 Bytes */  
-#elif defined(RADIO_T18)
-  #define USB_NAME                     "Jumper T18"
-  #define USB_MANUFACTURER             'J', 'u', 'm', 'p', 'e', 'r', ' ', ' '  /* 8 bytes */
-  #define USB_PRODUCT                  'T', '1', '8', ' ', ' ', ' ', ' ', ' '  /* 8 Bytes */
-#elif defined(RADIO_TX16S)
-  #define USB_NAME                     "RM TX16S"
-  #define USB_MANUFACTURER             'R', 'M', '_', 'T', 'X', ' ', ' ', ' '  /* 8 bytes */
-  #define USB_PRODUCT                  'R', 'M', ' ', 'T', 'X', '1', '6', 'S'  /* 8 Bytes */
-#elif defined(PCBX10)
-  #define USB_NAME                     "FrSky X10"
-  #define USB_MANUFACTURER             'F', 'r', 'S', 'k', 'y', ' ', ' ', ' '  /* 8 bytes */
-  #define USB_PRODUCT                  'X', '1', '0', ' ', ' ', ' ', ' ', ' '  /* 8 Bytes */
-#endif
+#define BACKLIGHT_DISABLE()                                               \
+  {                                                                       \
+    boardBacklightOn = false;                                             \
+    backlightEnable(((g_eeGeneral.blOffBright == BACKLIGHT_LEVEL_MIN) &&  \
+                     (g_eeGeneral.backlightMode != e_backlight_mode_off)) \
+                        ? 0                                               \
+                        : g_eeGeneral.blOffBright);                       \
+  }
 
 #if defined(__cplusplus) && !defined(SIMU)
 }
@@ -349,7 +292,7 @@ void telemetryPortInvertedInit(uint32_t baudrate);
 
 
 // Aux serial port driver
-#if defined(RADIO_TX16S)
+#if defined(RADIO_TX16S) || defined(RADIO_F16) || defined(RADIO_V16)
   #define DEBUG_BAUDRATE                  400000
   #define LUA_DEFAULT_BAUDRATE            115200
 #else
@@ -376,10 +319,29 @@ void bluetoothWriteWakeup();
 uint8_t bluetoothIsWriting();
 void bluetoothDisable();
 
-#if defined (RADIO_TX16S)
+#if defined(RADIO_TX16S) || defined(RADIO_F16) || defined(RADIO_V16)
   #define BATTERY_DIVIDER 1495
 #else
   #define BATTERY_DIVIDER 1629
-#endif 
+#endif
 
-#endif // _BOARD_H_
+#if defined(FUNCTION_SWITCHES)
+#define NUM_FUNCTIONS_SWITCHES 6
+#define NUM_FUNCTIONS_GROUPS   3
+#define DEFAULT_FS_CONFIG                                         \
+  (SWITCH_2POS << 10) + (SWITCH_2POS << 8) + (SWITCH_2POS << 6) + \
+      (SWITCH_2POS << 4) + (SWITCH_2POS << 2) + (SWITCH_2POS << 0)
+
+#define DEFAULT_FS_GROUPS                                 \
+  (1 << 10) + (1 << 8) + (1 << 6) + (1 << 4) + (1 << 2) + \
+      (1 << 0)  // Set all FS to group 1 to act like a 6pos
+
+#define DEFAULT_FS_STARTUP_CONFIG                         \
+  ((FS_START_PREVIOUS << 10) + (FS_START_PREVIOUS << 8) + \
+   (FS_START_PREVIOUS << 6) + (FS_START_PREVIOUS << 4) +  \
+   (FS_START_PREVIOUS << 2) +                             \
+   (FS_START_PREVIOUS << 0))  // keep last state by default
+
+#else
+#define NUM_FUNCTIONS_SWITCHES 0
+#endif

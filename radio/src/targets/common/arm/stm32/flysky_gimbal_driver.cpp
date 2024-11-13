@@ -21,10 +21,12 @@
 
 #include "flysky_gimbal_driver.h"
 #include "stm32_serial_driver.h"
+#include "stm32_gpio.h"
 #include "stm32_adc.h"
 
 #include "delays_driver.h"
 #include "hal/adc_driver.h"
+#include "hal/gpio.h"
 
 #include "hal.h"
 #include "crc.h"
@@ -33,8 +35,8 @@
 
 static const stm32_usart_t fsUSART = {
   .USARTx = FLYSKY_HALL_SERIAL_USART,
-  .GPIOx = FLYSKY_HALL_SERIAL_GPIO,
-  .GPIO_Pin = FLYSKY_HALL_SERIAL_RX_GPIO_PIN,
+  .txGPIO = GPIO_UNDEF,
+  .rxGPIO = FLYSKY_HALL_SERIAL_RX_GPIO,
   .IRQn = FLYSKY_HALL_SERIAL_USART_IRQn,
   .IRQ_Prio = 6,
   .txDMA = nullptr,
@@ -119,7 +121,7 @@ static void _fs_parse(STRUCT_HALL *hallBuffer, unsigned char ch)
 
 static volatile bool _fs_gimbal_detected;
 
-static void flysky_gimbal_loop()
+static void flysky_gimbal_loop(void*)
 {
   uint8_t byte;
 
@@ -164,14 +166,14 @@ bool flysky_gimbal_init()
 
   _fs_gimbal_detected = false;
   _fs_usart_ctx = STM32SerialDriver.init(REF_STM32_SERIAL_PORT(FSGimbal), &cfg);
-  STM32SerialDriver.setIdleCb(_fs_usart_ctx, flysky_gimbal_loop);
+  STM32SerialDriver.setIdleCb(_fs_usart_ctx, flysky_gimbal_loop, 0);
 
   // Wait 70ms for FlySky gimbals to respond. According to LA trace, minimally 23ms is required
   for (uint8_t i = 0; i < 70; i++) {
     delay_ms(1);
     if (_fs_gimbal_detected) {
       // Mask the first 4 inputs (sticks)
-      stm32_hal_mask_inputs(0xF);
+      stm32_hal_set_inputs_mask(0xF);
       return true;
     }
   }

@@ -1,7 +1,8 @@
 /*
- * Copyright (C) OpenTX
+ * Copyright (C) EdgeTX
  *
  * Based on code named
+ *   opentx - https://github.com/opentx/opentx
  *   th9x - http://code.google.com/p/th9x
  *   er9x - http://code.google.com/p/er9x
  *   gruvin9x - http://code.google.com/p/gruvin9x
@@ -31,8 +32,18 @@
 #include "helpers.h"
 
 #include <QMessageBox>
+#include <QPushButton>
 
-SemanticVersion radioSettingsVersion;
+void YamlValidateNames(GeneralSettings& gs, Board::Type board)
+{
+  for (int i = 0; i < CPN_MAX_INPUTS; i++) {
+    YamlValidateName(gs.inputConfig[i].name, board);
+  }
+
+  for (int i = 0; i < CPN_MAX_SWITCHES; i++) {
+    YamlValidateName(gs.switchConfig[i].name, board);
+  }
+}
 
 const YamlLookupTable beeperModeLut = {
   {  GeneralSettings::BEEPER_QUIET, "mode_quiet" },
@@ -45,7 +56,7 @@ enum BacklightMode {
   e_backlight_mode_off  = 0,
   e_backlight_mode_keys = 1,
   e_backlight_mode_sticks = 2,
-  e_backlight_mode_all = e_backlight_mode_keys+e_backlight_mode_sticks,
+  e_backlight_mode_all = e_backlight_mode_keys + e_backlight_mode_sticks,
   e_backlight_mode_on
 };
 
@@ -114,7 +125,15 @@ const YamlLookupTable internalModuleLut = {
   {  MODULE_TYPE_R9M_LITE_PRO_PXX2, "TYPE_R9M_LITE_PRO_PXX2"  },
   {  MODULE_TYPE_SBUS, "TYPE_SBUS"  },
   {  MODULE_TYPE_XJT_LITE_PXX2, "TYPE_XJT_LITE_PXX2"  },
-  {  MODULE_TYPE_FLYSKY, "TYPE_FLYSKY"  },
+  {  MODULE_TYPE_FLYSKY_AFHDS2A, "TYPE_FLYSKY_AFHDS2A"  },
+  {  MODULE_TYPE_FLYSKY_AFHDS3, "TYPE_FLYSKY_AFHDS3"  },
+  {  MODULE_TYPE_LEMON_DSMP, "TYPE_LEMON_DSMP"  },
+};
+
+static const YamlLookupTable hatsModeLut = {
+  {  GeneralSettings::HATSMODE_TRIMS_ONLY, "TRIMS_ONLY"  },
+  {  GeneralSettings::HATSMODE_KEYS_ONLY, "KEYS_ONLY"  },
+  {  GeneralSettings::HATSMODE_SWITCHABLE, "SWITCHABLE"  },
 };
 
 YamlTelemetryBaudrate::YamlTelemetryBaudrate(
@@ -150,25 +169,33 @@ Node convert<GeneralSettings>::encode(const GeneralSettings& rhs)
   Node node;
 
   auto fw = getCurrentFirmware();
+  auto board = fw->getBoard();
 
-  bool hasColorLcd = Boards::getCapability(fw->getBoard(), Board::HasColorLcd);
+  bool hasColorLcd = Boards::getCapability(board, Board::HasColorLcd);
 
   node["semver"] = VERSION;
 
-  std::string board = fw->getFlavour().toStdString();
-  node["board"] = board;
+  std::string strboard = fw->getFlavour().toStdString();
+  node["board"] = strboard;
 
-  YamlCalibData calib(rhs.calibMid, rhs.calibSpanNeg, rhs.calibSpanPos);
+  if (rhs.manuallyEdited)
+    node["manuallyEdited"] = (int)rhs.manuallyEdited;
+
+  YamlCalibData calib(rhs.inputConfig);
   node["calib"] = calib;
 
-  node["currModel"] = rhs.currModelIndex;
   node["currModelFilename"] = patchFilenameToYaml(rhs.currModelFilename);
-  node["contrast"] = rhs.contrast;
   node["vBatWarn"] = rhs.vBatWarn;
   node["txVoltageCalibration"] = rhs.txVoltageCalibration;
 
   node["vBatMin"] = rhs.vBatMin + 90;
   node["vBatMax"] = rhs.vBatMax + 120;
+
+  if (!Boards::getCapability(board, Board::HasColorLcd)) {
+    node["backlightColor"] = rhs.backlightColor;
+    node["contrast"] = rhs.contrast;
+    node["currModel"] = rhs.currModelIndex;
+  }
 
   node["backlightMode"] = backlightModeLut << std::abs(rhs.backlightMode);
   node["trainer"] = rhs.trainer;
@@ -177,9 +204,12 @@ Node convert<GeneralSettings>::encode(const GeneralSettings& rhs)
   node["fai"] = (int)rhs.fai;
   node["disableMemoryWarning"] = (int)rhs.disableMemoryWarning;
   node["beepMode"] = rhs.beeperMode;
+  node["alarmsFlash"] = (int)rhs.alarmsFlash;
   node["disableAlarmWarning"] = (int)rhs.disableAlarmWarning;
   node["disableRssiPoweroffAlarm"] = (int)rhs.disableRssiPoweroffAlarm;
+  node["disableTrainerPoweroffAlarm"] = (int)rhs.disableTrainerPoweroffAlarm;
   node["USBMode"] = rhs.usbMode;
+  node["hatsMode"] = hatsModeLut << rhs.hatsMode;
   node["stickDeadZone"] = rhs.stickDeadZone;
   node["jackMode"] = rhs.jackMode;
   node["hapticMode"] = rhs.hapticMode;
@@ -216,6 +246,7 @@ Node convert<GeneralSettings>::encode(const GeneralSettings& rhs)
   node["keysBacklight"] = (int)rhs.keysBacklight;
   node["rotEncMode"] = (int)rhs.rotEncMode;
   node["imperial"] = rhs.imperial;
+  node["ppmunit"] = rhs.ppmunit;
   node["ttsLanguage"] = rhs.ttsLanguage;
   node["beepVolume"] = rhs.beepVolume + 2;
   node["wavVolume"] = rhs.wavVolume + 2;
@@ -225,8 +256,14 @@ Node convert<GeneralSettings>::encode(const GeneralSettings& rhs)
   node["varioRepeat"] = rhs.varioRepeat;
   node["backgroundVolume"] = rhs.backgroundVolume + 2;
   node["dontPlayHello"] = (int)rhs.dontPlayHello;
-  if (Boards::getCapability(fw->getBoard(), Board::HasColorLcd)) {
+  if (hasColorLcd) {
     node["modelQuickSelect"] = (int)rhs.modelQuickSelect;
+    node["modelSelectLayout"] = rhs.modelSelectLayout;
+    node["labelSingleSelect"] = rhs.labelSingleSelect;
+    node["labelMultiMode"] = rhs.labelMultiMode;
+    node["favMultiMode"] = rhs.favMultiMode;
+  } else if (Boards::getCapability(board, Board::LcdWidth) == 128) {
+    node["invertLCD"] = (int)rhs.invertLCD;
   }
 
   Node serialPort;
@@ -241,9 +278,10 @@ Node convert<GeneralSettings>::encode(const GeneralSettings& rhs)
     node["serialPort"] = serialPort;
 
   node["antennaMode"] = antennaModeLut << rhs.antennaMode;
-  node["backlightColor"] = rhs.backlightColor;
   node["pwrOnSpeed"] = rhs.pwrOnSpeed;
   node["pwrOffSpeed"] = rhs.pwrOffSpeed;
+  node["pwrOffIfInactive"] = rhs.pwrOffIfInactive; // Power off after inactivity
+  node["disablePwrOnOffHaptic"] = (int)rhs.disablePwrOnOffHaptic;
 
   for (int i = 0; i < CPN_MAX_SPECIAL_FUNCTIONS; i++) {
     const CustomFunctionData& fn = rhs.customFn[i];
@@ -253,38 +291,35 @@ Node convert<GeneralSettings>::encode(const GeneralSettings& rhs)
   }
 
   Node sticksConfig;
-  sticksConfig = YamlStickConfig(rhs.stickName);
+  sticksConfig = YamlStickConfig(rhs.inputConfig);
   if (sticksConfig && sticksConfig.IsMap()) {
     node["sticksConfig"] = sticksConfig;
   }
 
-  Node switchConfig;
-  switchConfig = YamlSwitchConfig(rhs.switchName, rhs.switchConfig);
-  if (switchConfig && switchConfig.IsMap()) {
-    node["switchConfig"] = switchConfig;
-  }
-
-  // combine pots and sliders into potsConfig
   Node potsConfig;
-  potsConfig = YamlPotConfig(rhs.potName, rhs.potConfig);
+  potsConfig = YamlPotConfig(rhs.inputConfig);
   if (potsConfig && potsConfig.IsMap()) {
     node["potsConfig"] = potsConfig;
   }
 
-  Node slidersConfig;
-  slidersConfig = YamlSliderConfig(rhs.sliderName, rhs.sliderConfig);
-  if (slidersConfig && slidersConfig.IsMap()) {
-    node["slidersConfig"] = slidersConfig;
+  Node switchConfig;
+  switchConfig = YamlSwitchConfig(rhs.switchConfig);
+  if (switchConfig && switchConfig.IsMap()) {
+    node["switchConfig"] = switchConfig;
   }
 
-  // Color lcd theme settings are not used in EdgeTx
-  // RadioTheme::ThemeData themeData;
+  Node flexSwitches;
+  flexSwitches = YamlSwitchesFlex(rhs.switchConfig);
+  if (flexSwitches && flexSwitches.IsMap()) {
+    node["flexSwitches"] = flexSwitches;
+  }
 
   node["ownerRegistrationID"] = rhs.registrationId;
 
-  // Gyro (for now only xlites)
-  node["gyroMax"] = rhs.gyroMax;
-  node["gyroOffset"] = rhs.gyroOffset;
+  if (Boards::getCapability(board, Board::HasIMU)) {
+    node["imuMax"] = rhs.imuMax;
+    node["imuOffset"] = rhs.imuOffset;
+  }
 
   // OneBit sampling (X9D only?)
   node["uartSampleMode"] = rhs.uartSampleMode;
@@ -295,6 +330,7 @@ Node convert<GeneralSettings>::encode(const GeneralSettings& rhs)
   // Radio level tabs control (global settings)
   if (hasColorLcd)
     node["radioThemesDisabled"] = (int)rhs.radioThemesDisabled;
+
   node["radioGFDisabled"] = (int)rhs.radioGFDisabled;
   node["radioTrainerDisabled"] = (int)rhs.radioTrainerDisabled;
   // Model level tabs control (global setting)
@@ -334,11 +370,20 @@ bool convert<GeneralSettings>::decode(const Node& node, GeneralSettings& rhs)
   qDebug() << "Settings version:" << radioSettingsVersion.toString();
 
   if (radioSettingsVersion > SemanticVersion(VERSION)) {
-    QString prmpt = QCoreApplication::translate("YamlGeneralSettings", "Warning: Radio settings file version %1 is not supported by this version of Companion!\n\nModel and radio settings may be corrupted if you continue.\n\nI acknowledge and accept the consequences.");
-    if (QMessageBox::warning(NULL, CPN_STR_APP_NAME, prmpt.arg(radioSettingsVersion.toString()), (QMessageBox::Yes | QMessageBox::No), QMessageBox::No) != QMessageBox::Yes) {
-      //  TODO: this triggers an error in the calling code so we need a graceful way to handle
+    QString prmpt = QCoreApplication::translate("YamlGeneralSettings", "Warning: File version %1 is not supported by this version of Companion!\n\nModel and radio settings may be corrupted if you continue.");
+    prmpt = prmpt.arg(radioSettingsVersion.toString());
+    QMessageBox msgBox;
+    msgBox.setWindowTitle(QCoreApplication::translate("YamlGeneralSettings", "Read Radio Settings"));
+    msgBox.setText(prmpt);
+    msgBox.setIcon(QMessageBox::Warning);
+    QPushButton *pbAccept = new QPushButton(CPN_STR_TTL_ACCEPT);
+    QPushButton *pbDecline = new QPushButton(CPN_STR_TTL_DECLINE);
+    msgBox.addButton(pbAccept, QMessageBox::AcceptRole);
+    msgBox.addButton(pbDecline, QMessageBox::RejectRole);
+    msgBox.setDefaultButton(pbDecline);
+    msgBox.exec();
+    if (msgBox.clickedButton() == pbDecline)
       return false;
-    }
   }
 
   rhs.version = CPN_CURRENT_SETTINGS_VERSION; // depreciated in EdgeTX however data conversions use
@@ -390,7 +435,7 @@ bool convert<GeneralSettings>::decode(const Node& node, GeneralSettings& rhs)
 
   YamlCalibData calib;
   node["calib"] >> calib;
-  calib.copy(rhs.calibMid, rhs.calibSpanNeg, rhs.calibSpanPos);
+  calib.copy(rhs.inputConfig);
 
   node["currModel"] >> rhs.currModelIndex;
   node["currModelFilename"] >> rhs.currModelFilename;
@@ -408,9 +453,12 @@ bool convert<GeneralSettings>::decode(const Node& node, GeneralSettings& rhs)
   node["fai"] >> rhs.fai;
   node["disableMemoryWarning"] >> rhs.disableMemoryWarning;
   node["beepMode"] >> rhs.beeperMode;
+  node["alarmsFlash"] >> rhs.alarmsFlash;
   node["disableAlarmWarning"] >> rhs.disableAlarmWarning;
   node["disableRssiPoweroffAlarm"] >> rhs.disableRssiPoweroffAlarm;
+  node["disableTrainerPoweroffAlarm"] >> rhs.disableTrainerPoweroffAlarm;
   node["USBMode"] >> rhs.usbMode;
+  node["hatsMode"] >> hatsModeLut >> rhs.hatsMode;
   node["stickDeadZone"] >> rhs.stickDeadZone;
   node["jackMode"] >> rhs.jackMode;
   node["hapticMode"] >> rhs.hapticMode;
@@ -459,6 +507,7 @@ bool convert<GeneralSettings>::decode(const Node& node, GeneralSettings& rhs)
   node["rotEncDirection"] >> rhs.rotEncMode;    // PR2045: read old name and
   node["rotEncMode"] >> rhs.rotEncMode;         // new, but don't write old
   node["imperial"] >> rhs.imperial;
+  node["ppmunit"] >> rhs.ppmunit;
   node["ttsLanguage"] >> rhs.ttsLanguage;
   node["beepVolume"] >> ioffset_int(rhs.beepVolume, 2);
   node["wavVolume"] >> ioffset_int(rhs.wavVolume, 2);
@@ -469,6 +518,7 @@ bool convert<GeneralSettings>::decode(const Node& node, GeneralSettings& rhs)
   node["backgroundVolume"] >> ioffset_int(rhs.backgroundVolume, 2);
   node["modelQuickSelect"] >> rhs.modelQuickSelect;
   node["dontPlayHello"] >> rhs.dontPlayHello;
+  node["invertLCD"] >> rhs.invertLCD;
 
   //  depreciated v2.7 replaced by serialPort
   if (node["auxSerialMode"]) {
@@ -510,41 +560,76 @@ bool convert<GeneralSettings>::decode(const Node& node, GeneralSettings& rhs)
   node["backlightColor"] >> rhs.backlightColor;
   node["pwrOnSpeed"] >> rhs.pwrOnSpeed;
   node["pwrOffSpeed"] >> rhs.pwrOffSpeed;
+  node["pwrOffIfInactive"] >> rhs.pwrOffIfInactive;   // Power off after inactivity
+  node["disablePwrOnOffHaptic"] >> rhs.disablePwrOnOffHaptic;
 
-  node["customFn"] >> rhs.customFn;
+  if (node["customFn"]) {
+    // decode common for radio GF and model SF and conversion test assumes decoding a model
+    modelSettingsVersion = radioSettingsVersion;
+    node["customFn"] >> rhs.customFn;
+  }
 
-  YamlStickConfig stickConfig;
-  node["sticksConfig"] >> stickConfig;
-  stickConfig.copy(rhs.stickName);
+  // the GeneralSettings struct is initialised to hardware definition defaults which is fine for new settings
+  // however when parsing saved settings set all inputs to None and override with parsed values
+  // thus any inputs not parsed will be None rather than the default
+  for (int i = 0; i < CPN_MAX_INPUTS; i++) {
+    rhs.inputConfig[i].flexType = (Board::FlexType)Board::FLEX_NONE;
+  }
 
-  YamlSwitchConfig switchConfig;
-  node["switchConfig"] >> switchConfig;
-  switchConfig.copy(rhs.switchName, rhs.switchConfig);
+  if (node["sticksConfig"]) {
+    YamlStickConfig stickConfig;
+    node["sticksConfig"] >> stickConfig;
+    // merge
+    stickConfig.copy(rhs.inputConfig);
+  }
 
-  YamlPotConfig potsConfig;
-  node["potsConfig"] >> potsConfig;
-  potsConfig.copy(rhs.potName, rhs.potConfig);
+  if (node["potsConfig"]) {
+    YamlPotConfig potsConfig;
+    node["potsConfig"] >> potsConfig;
+    // merge
+    potsConfig.copy(rhs.inputConfig);
+  }
 
-  YamlSliderConfig slidersConfig;
-  node["slidersConfig"] >> slidersConfig;
-  slidersConfig.copy(rhs.sliderName, rhs.sliderConfig);
+  // for parsing pre v2.10 config - this is not encoded
+  if (node["slidersConfig"]) {
+    YamlSliderConfig slidersConfig;
+    node["slidersConfig"] >> slidersConfig;
+    // merge
+    slidersConfig.copy(rhs.inputConfig);
+  }
 
-  // Color lcd theme settings are not used in EdgeTx
-  // RadioTheme::ThemeData themeData;
+  // the GeneralSettings struct is initialised to hardware definition defaults which is fine for new settings
+  // however when parsing saved settings set all switches to None and override with parsed values
+  // thus any switches not parsed will be None rather than the default
+  for (int i = 0; i < CPN_MAX_SWITCHES; i++) {
+    rhs.switchConfig[i].type = Board::SWITCH_NOT_AVAILABLE;
+  }
+
+  if (node["switchConfig"]) {
+    YamlSwitchConfig switchConfig;
+    node["switchConfig"] >> switchConfig;
+    switchConfig.copy(rhs.switchConfig);
+  }
+
+  // MUST be parsed after switchConfig
+  if (node["flexSwitches"]) {
+    YamlSwitchesFlex flexSwitches;
+    node["flexSwitches"] >> flexSwitches;
+    // merge
+    flexSwitches.copy(rhs.switchConfig);
+  }
 
   node["ownerRegistrationID"] >> rhs.registrationId;
 
-  // Gyro (for now only xlites)
-  node["gyroMax"] >> rhs.gyroMax;
-  node["gyroOffset"] >> rhs.gyroOffset;
+  // depreciated in 2.11
+  node["gyroMax"] >> rhs.imuMax;
+  node["gyroOffset"] >> rhs.imuOffset;
+
+  node["imuMax"] >> rhs.imuMax;
+  node["imuOffset"] >> rhs.imuOffset;
 
   // OneBit sampling (X9D only?)
   node["uartSampleMode"] >> rhs.uartSampleMode;
-
-  //  override critical settings after import
-  //  TODO: for consistency move up call stack to use existing eeprom and profile conversions
-  if (needsConversion)
-    rhs.init();
 
   node["selectedTheme"] >> rhs.selectedTheme;
 
@@ -561,6 +646,20 @@ bool convert<GeneralSettings>::decode(const Node& node, GeneralSettings& rhs)
   node["modelSFDisabled"] >> rhs.modelSFDisabled;
   node["modelCustomScriptsDisabled"] >> rhs.modelCustomScriptsDisabled;
   node["modelTelemetryDisabled"] >> rhs.modelTelemetryDisabled;
+
+  node["modelSelectLayout"] >> rhs.modelSelectLayout;
+  node["labelSingleSelect"] >> rhs.labelSingleSelect;
+  node["labelMultiMode"] >> rhs.labelMultiMode;
+  node["favMultiMode"] >> rhs.favMultiMode;
+
+  //  override critical settings after import
+  //  TODO: for consistency move up call stack to use existing eeprom and profile conversions
+  if (needsConversion)
+    rhs.init();
+
+  // perform integrity checks and fix-ups
+  YamlValidateNames(rhs, fw->getBoard());
+  rhs.validateFlexSwitches();
 
   return true;
 }

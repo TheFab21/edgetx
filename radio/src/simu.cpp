@@ -29,7 +29,7 @@
 #include "FXPNGImage.h"
 #include <unistd.h>
 #include "fxkeys.h"
-#include "opentx.h"
+#include "edgetx.h"
 #include <time.h>
 #include <ctype.h>
 
@@ -134,7 +134,7 @@ OpenTxSim::OpenTxSim(FXApp* a):
     sliders[i]->setValue(2047);
   }
 
-  auto max_pots = adcGetMaxInputs(ADC_INPUT_POT);
+  auto max_pots = adcGetMaxInputs(ADC_INPUT_FLEX);
   memset(knobs, 0, sizeof(knobs));
   
   for (int i = 0; i < max_pots; i++) {
@@ -167,10 +167,6 @@ OpenTxSim::~OpenTxSim()
 
   simuStop();
   stopAudioThread();
-
-#if defined(EEPROM)
-  stopEepromThread();
-#endif
 
   delete bmp;
   delete sliders[0];
@@ -348,12 +344,13 @@ long OpenTxSim::onMouseMove(FXObject*,FXSelector,void*v)
 void OpenTxSim::updateKeysAndSwitches(bool start)
 {
   static int keys[] = {
-#if defined(PCBNV14)
+#if defined(PCBFLYSKY)
     // no keys
 #elif defined(PCBHORUS)
     KEY_Page_Up,   KEY_PAGEUP,
     KEY_Page_Down, KEY_PAGEDN,
     KEY_Return,    KEY_ENTER,
+    KEY_BackSpace, KEY_EXIT,
     KEY_Up,        KEY_UP,
     KEY_Down,      KEY_DOWN,
     KEY_Right,     KEY_RIGHT,
@@ -368,10 +365,11 @@ void OpenTxSim::updateKeysAndSwitches(bool start)
     KEY_Left,      KEY_LEFT,
     KEY_Up,        KEY_UP,
     KEY_Down,      KEY_DOWN,
-#elif defined(RADIO_TX12) || defined(RADIO_TX12MK2) || defined(RADIO_BOXER) || defined(RADIO_ZORRO)
+#elif defined(RADIO_TX12) || defined(RADIO_TX12MK2) || defined(RADIO_BOXER) || defined(RADIO_ZORRO) || defined(RADIO_MT12) || defined(RADIO_POCKET)
     KEY_Page_Up,   KEY_PAGEUP,
     KEY_Page_Down, KEY_PAGEDN,
     KEY_Return,    KEY_ENTER,
+    KEY_BackSpace, KEY_EXIT,
     KEY_Up,        KEY_MODEL,
     KEY_Down,      KEY_EXIT,
     KEY_Right,     KEY_TELE,
@@ -387,9 +385,7 @@ void OpenTxSim::updateKeysAndSwitches(bool start)
     KEY_Down,      KEY_MINUS,
 #elif defined(PCBTARANIS)
     KEY_Page_Up,   KEY_MENU,
-  #if defined(KEYS_GPIO_REG_PAGE)
-    KEY_Page_Down, KEY_PAGE,
-  #endif
+    KEY_Page_Down, KEY_PAGEDN,
     KEY_Return,    KEY_ENTER,
     KEY_BackSpace, KEY_EXIT,
     KEY_Up,        KEY_PLUS,
@@ -409,15 +405,12 @@ void OpenTxSim::updateKeysAndSwitches(bool start)
   }
 
 #ifdef __APPLE__
-  // gruvin: Can't use Function keys on the Mac -- too many other app conflicts.
-  //         The ordering of these keys, Q/W,E/R,T/Y,U/I matches the on screen
-  //         order of trim sliders
   static FXuint trimKeys[] = { KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9, KEY_0 };
 #else
   static FXuint trimKeys[] = { KEY_F1, KEY_F2, KEY_F3, KEY_F4, KEY_F5, KEY_F6, KEY_F7, KEY_F8, KEY_F9, KEY_F10, KEY_F11, KEY_F12 };
 #endif
 
-  for (unsigned i=0; i<sizeof(trimKeys)/(2*sizeof(FXuint)); i++) {
+  for (unsigned i = 0; i < sizeof(trimKeys) / sizeof(FXuint); i++) {
     simuSetTrim(i, getApp()->getKeyState(trimKeys[i]));
   }
 
@@ -443,7 +436,7 @@ void OpenTxSim::updateKeysAndSwitches(bool start)
   SWITCH_KEY(C, 2, 3);
   SWITCH_KEY(D, 3, 3);
 
-  #if defined(RADIO_TPRO) || defined(RADIO_TPROV2)
+  #if defined(RADIO_TPRO) || defined(RADIO_TPROV2) || defined(RADIO_TPROS) || defined(RADIO_BUMBLEBEE)
     SWITCH_KEY(1, 4, 2);
     SWITCH_KEY(2, 5, 2);
     SWITCH_KEY(3, 6, 2);
@@ -648,12 +641,7 @@ int main(int argc, char ** argv)
   opentxSim->show(); // Otherwise the main window gets centred across my two monitors, split down the middle.
 #endif
 
-
   printf("Model size = %d\n", (int)sizeof(g_model));
-
-#if defined(EEPROM) || defined(EEPROM_RLC)
-  startEepromThread(argc >= 2 ? argv[1] : "eeprom.bin");
-#endif
 
 #if !defined(SIMU_BOOTLOADER)
   startAudioThread();
@@ -671,14 +659,9 @@ uint16_t simu_get_analog(uint8_t idx)
 
   idx -= max_sticks;
 
-  auto max_pots = adcGetMaxInputs(ADC_INPUT_POT);
+  auto max_pots = adcGetMaxInputs(ADC_INPUT_FLEX);
   if (idx < max_pots)
     return opentxSim->knobs[idx]->getValue();
-
-  idx -= max_pots;
-
-  auto max_axes = adcGetMaxInputs(ADC_INPUT_AXIS);
-  if (idx < max_axes) return 0;
 
   // probably RTC_BAT
   return 0;

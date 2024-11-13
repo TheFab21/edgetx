@@ -18,7 +18,21 @@ set(SIMU_DRIVERS
   backlight_driver.cpp
   gyro_driver.cpp
   bt_driver.cpp
+  timers_driver.cpp
+  abnormal_reboot.cpp
+  rs232-linux.c
   )
+
+  option(SIMU_AUX "Allow the simulator to use the host's RS-232 port" OFF)
+  set(SIMU_COM_PORT "2" CACHE STRING "Set COM port number to use")
+
+if (SIMU_AUX)
+  if(WIN32)
+    set(SIMU_DRIVERS ${SIMU_DRIVERS} rs232-win.c)
+  else()
+    set(SIMU_DRIVERS ${SIMU_DRIVERS} rs232-linux.c)
+  endif()
+endif()
 
 set(HW_DESC_JSON ${FLAVOUR}.json)
 AddHardwareDefTarget(${HW_DESC_JSON})
@@ -52,7 +66,7 @@ if(SIMU_BOOTLOADER)
     ../../targets/common/arm/stm32/bootloader/bin_files.cpp
     ../../targets/common/arm/stm32/bootloader/boot.cpp
     ../../targets/${TARGET_DIR}/bootloader/boot_menu.cpp
-    ../../thirdparty/libopenui/thirdparty/lz4/lz4.c
+    ../../thirdparty/lz4/lz4.c
     )
 endif()
 
@@ -67,6 +81,10 @@ get_property(SIMU_SRC_OPTIONS
 target_compile_options(simu_drivers PRIVATE ${SIMU_SRC_OPTIONS})
 
 set_property(TARGET simu_drivers PROPERTY POSITION_INDEPENDENT_CODE ON)
+
+if(SIMU_AUX)
+  target_compile_definitions(simu_drivers PRIVATE -DSIMU_COM_PORT=${SIMU_COM_PORT})
+endif()
 
 # Replace SIMU_SRC with the objects from radiolib_native & simu_drivers
 set(SIMU_SRC

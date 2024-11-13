@@ -19,8 +19,7 @@
  * GNU General Public License for more details.
  */
 
-#ifndef _PULSES_H_
-#define _PULSES_H_
+#pragma once
 
 #include "definitions.h"
 #include "dataconstants.h"
@@ -66,7 +65,8 @@ PACK(struct ModuleState {
   uint8_t protocol;
   uint8_t mode:4;
   uint8_t forced_off:1;
-  uint8_t spare:3;
+  uint8_t settings_updated:1;
+  uint8_t spare:2;
   uint16_t counter;
 
 #if defined(PXX2)
@@ -174,6 +174,14 @@ void pulsesSetModuleDeInitCb(module_deinit_cb_t cb);
 void restartModule(uint8_t module);
 bool restartModuleAsync(uint8_t module, uint8_t cnt_delay);
 
+// Re-Init module
+// 
+// Note: this can only be used from within
+//       module init.
+void pulsesRestartModuleUnsafe(uint8_t module);
+
+void pulsesModuleSettingsUpdate(uint8_t module);
+
 void setupPulsesPPMTrainer();
 
 void getModuleStatusString(uint8_t moduleIdx, char * statusText);
@@ -228,5 +236,3 @@ inline bool isModuleInBeepMode()
 
   return false;
 }
-
-#endif // _PULSES_H_

@@ -19,7 +19,7 @@
  * GNU General Public License for more details.
  */
 
-#include "opentx.h" 
+#include "edgetx.h" 
 
 enum DanishPrompts {
   DA_PROMPT_NUMBERS_BASE = 0,
@@ -34,7 +34,7 @@ enum DanishPrompts {
 };
 
 
-#define DA_PUSH_UNIT_PROMPT(u, p) da_pushUnitPrompt((u), (p), id)
+#define DA_PUSH_UNIT_PROMPT(u, p) da_pushUnitPrompt((u), (p), id, fragmentVolume)
 
 I18N_PLAY_FUNCTION(da, pushUnitPrompt, uint8_t unitprompt, int16_t number)
 {

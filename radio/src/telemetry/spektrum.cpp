@@ -19,7 +19,7 @@
  * GNU General Public License for more details.
  */
 
-#include "opentx.h"
+#include "edgetx.h"
 #include "spektrum.h"
 #include "hal/module_port.h"
 #include "tasks/mixer_task.h"
@@ -49,6 +49,7 @@
 #define I2C_PSEUDO_TX_RSSI   (I2C_PSEUDO_TX << 8 | 0)
 #define I2C_PSEUDO_TX_BIND   (I2C_PSEUDO_TX << 8 | 4)
 #define I2C_PSEUDO_TX_FM     (I2C_PSEUDO_TX << 8 | 8)
+#define I2C_PSEUDO_TX_CELLS  (I2C_PSEUDO_TX << 8 | 10)
 
 #define SPEKTRUM_TELEMETRY_LENGTH 18
 #define DSM_BIND_PACKET_LENGTH 12
@@ -75,6 +76,7 @@
 #define I2C_ESC                       0x20  // Electronic Speed Control
 #define I2C_ALPHA6                    0x24  // Alpha6 Stabilizer - Blade Helis
 #define I2C_GPS_BIN                   0x26  // GPS, binary format
+#define I2C_REMOTE_ID                 0x27  // Spektrum SkyID/RemoteID
 #define I2C_FP_BATT                   0x34  // Flight Battery Capacity (Dual)
 #define I2C_CELLS                     0x3A  // 6S Cell Monitor (LiPo taps)
 #define I2C_VARIO                     0x40  // Vario
@@ -133,226 +135,234 @@ enum SpektrumDataType : uint8_t {
 
 struct SpektrumSensor {
   const uint8_t i2caddress;
-  const uint8_t startByte;
-  const SpektrumDataType dataType;
-  const char *name;
-  const TelemetryUnit unit;
+  const uint8_t startByte:4;
+  const SpektrumDataType dataType:4;
   const uint8_t precision;
+  const TelemetryUnit unit;
+  const char *name;
 };
 
+// clang-format off
+#define SS(i2caddress,startByte,dataType,name,unit,precision) {i2caddress,startByte,dataType,precision,unit,name}
+
+// IMPORTANT: Keep the sensor table incremtally sorted by i2caddress
 const SpektrumSensor spektrumSensors[] = {
   // 0x01 High voltage internal sensor
-  {I2C_VOLTAGE,      0,  int16,     STR_SENSOR_A1,                UNIT_VOLTS,     2}, // 0.01V increments 
+  SS(I2C_VOLTAGE,      0,  int16,     STR_SENSOR_A1,                UNIT_VOLTS,     2), // 0.01V increments 
 
   // 0x02 Temperature internal sensor
-  {I2C_TEMPERATURE,  0,  int16,     STR_SENSOR_TEMP1,             UNIT_FAHRENHEIT, 1}, // Temperature in degrees Fahrenheit
+  SS(I2C_TEMPERATURE,  0,  int16,     STR_SENSOR_TEMP1,             UNIT_FAHRENHEIT, 1), // Temperature in degrees Fahrenheit
 
   // 0x03 High current internal sensor (0x03), Resolution: 300A / 2048 = 0.196791 A/count
-  {I2C_HIGH_CURRENT, 0,  int16,     STR_SENSOR_CURR,              UNIT_AMPS,      1}, // Range: +/- 150A 
+  SS(I2C_HIGH_CURRENT, 0,  int16,     STR_SENSOR_CURR,              UNIT_AMPS,      1), // Range: +/- 150A 
 
   // 0x0A Powerbox (also mentioned as 0x7D but that is also transmitter frame data)
-  {I2C_PBOX,         0,  uint16,    STR_SENSOR_BATT1_VOLTAGE,     UNIT_VOLTS,     2},  // Volts, 0.01v
-  {I2C_PBOX,         2,  uint16,    STR_SENSOR_BATT2_VOLTAGE,     UNIT_VOLTS,     2},
-  {I2C_PBOX,         4,  uint16,    STR_SENSOR_BATT1_CONSUMPTION, UNIT_MAH,       0},  // mAh, 1mAh
-  {I2C_PBOX,         6,  uint16,    STR_SENSOR_BATT2_CONSUMPTION, UNIT_MAH,       0},
+  SS(I2C_PBOX,         0,  uint16,    STR_SENSOR_BATT1_VOLTAGE,     UNIT_VOLTS,     2),  // Volts, 0.01v
+  SS(I2C_PBOX,         2,  uint16,    STR_SENSOR_BATT2_VOLTAGE,     UNIT_VOLTS,     2),
+  SS(I2C_PBOX,         4,  uint16,    STR_SENSOR_BATT1_CONSUMPTION, UNIT_MAH,       0),  // mAh, 1mAh
+  SS(I2C_PBOX,         6,  uint16,    STR_SENSOR_BATT2_CONSUMPTION, UNIT_MAH,       0),
 
   // 0x0B Lap Timer
-  {I2C_LAPTIMER,     0, uint8,      STR_SENSOR_LAP_NUMBER,        UNIT_RAW,       0}, // Lap last finished
-  {I2C_LAPTIMER,     0, uint8,      STR_SENSOR_GATE_NUMBER,       UNIT_RAW,       0}, // Last gate passed
-  {I2C_LAPTIMER,     0, uint32,     STR_SENSOR_LAP_TIME,          UNIT_SECONDS,   3}, // Time of lap in 1ms increments
-  {I2C_LAPTIMER,     0, uint32,     STR_SENSOR_GATE_TIME,         UNIT_SECONDS,   3}, // Duration between last 2 gates
+  SS(I2C_LAPTIMER,     0, uint8,      STR_SENSOR_LAP_NUMBER,        UNIT_RAW,       0), // Lap last finished
+  SS(I2C_LAPTIMER,     0, uint8,      STR_SENSOR_GATE_NUMBER,       UNIT_RAW,       0), // Last gate passed
+  SS(I2C_LAPTIMER,     0, uint32,     STR_SENSOR_LAP_TIME,          UNIT_SECONDS,   3), // Time of lap in 1ms increments
+  SS(I2C_LAPTIMER,     0, uint32,     STR_SENSOR_GATE_TIME,         UNIT_SECONDS,   3), // Duration between last 2 gates
 
   // Text Generator
-//{I2C_TEXTGEN,      0, uint32,     STR_SENSOR_FLIGHT_MODE,       UNIT_TEXT,      0},
+//SS(I2C_TEXTGEN,      0, uint32,     STR_SENSOR_FLIGHT_MODE,       UNIT_TEXT,      0),
 
   // 0x11 AirSpeed
-  {I2C_AIRSPEED,     0,  int16,     STR_SENSOR_ASPD,              UNIT_KMH,       0}, // 1 km/h increments
-//{I2C_AIRSPEED,     2,  int16,     STR_SENSOR_MAX_ASPD ?,        UNIT_KMH,       0}, // 1 km/h increments
+  SS(I2C_AIRSPEED,     0,  int16,     STR_SENSOR_ASPD,              UNIT_KMH,       0), // 1 km/h increments
+//SS(I2C_AIRSPEED,     2,  int16,     STR_SENSOR_MAX_ASPD ?,        UNIT_KMH,       0), // 1 km/h increments
 
   // 0x012 Altitude
-  {I2C_ALTITUDE,     0,  int16,     STR_SENSOR_ALT,               UNIT_METERS,    1}, // .1m increments
-//{I2C_ALTITUDE,     2,  int16,     STR_SENSOR_MAX_ALT ?,         UNIT_METERS,    1}, // .1m increments
+  SS(I2C_ALTITUDE,     0,  int16,     STR_SENSOR_ALT,               UNIT_METERS,    1), // .1m increments
+//SS(I2C_ALTITUDE,     2,  int16,     STR_SENSOR_MAX_ALT ?,         UNIT_METERS,    1), // .1m increments
 
   // 0x14 G-Force
-  {I2C_GMETER,       0,  int16,     STR_SENSOR_ACCX,              UNIT_G,         2}, // force is reported as .01G increments
-  {I2C_GMETER,       2,  int16,     STR_SENSOR_ACCY,              UNIT_G,         2}, // 		Range = +/-4000 (+/- 40G) in Pro model
-  {I2C_GMETER,       4,  int16,     STR_SENSOR_ACCZ,              UNIT_G,         2}, // 		Range = +/-800 (+/- 8G) in Standard model
-//{I2C_GMETER,       6,  int16,     STR_SENSOR_MAX_ACCX ?,        UNIT_G,         2}, // abs(max G X-axis)   FORE/AFT
-//{I2C_GMETER,       8,  int16,     STR_SENSOR_MAX_ACCY ?,        UNIT_G,         2}, // abs (max G Y-axis)  LEFT/RIGHT
-//{I2C_GMETER,      10,  int16,     STR_SENSOR_MAX_ACCZ ?,        UNIT_G,         2}, // max G Z-axis        WING SPAR LOAD
-//{I2C_GMETER,      12,  int16,     STR_SENSOR_MIN_ACCZ ?,        UNIT_G,         2}, // min G Z-axis        WING SPAR LOAD
+  SS(I2C_GMETER,       0,  int16,     STR_SENSOR_ACCX,              UNIT_G,         2), // force is reported as .01G increments
+  SS(I2C_GMETER,       2,  int16,     STR_SENSOR_ACCY,              UNIT_G,         2), // 		Range = +/-4000 (+/- 40G) in Pro model
+  SS(I2C_GMETER,       4,  int16,     STR_SENSOR_ACCZ,              UNIT_G,         2), // 		Range = +/-800 (+/- 8G) in Standard model
+//SS(I2C_GMETER,       6,  int16,     STR_SENSOR_MAX_ACCX ?,        UNIT_G,         2), // abs(max G X-axis)   FORE/AFT
+//SS(I2C_GMETER,       8,  int16,     STR_SENSOR_MAX_ACCY ?,        UNIT_G,         2), // abs (max G Y-axis)  LEFT/RIGHT
+//SS(I2C_GMETER,      10,  int16,     STR_SENSOR_MAX_ACCZ ?,        UNIT_G,         2), // max G Z-axis        WING SPAR LOAD
+//SS(I2C_GMETER,      12,  int16,     STR_SENSOR_MIN_ACCZ ?,        UNIT_G,         2), // min G Z-axis        WING SPAR LOAD
 
   // 0x15,  JETCAT/TURBINE, BCD Encoded values
   // TODO: Add decoding of status information
-//{I2C_JETCAT,       0,  uint8,     STR_SENSOR_STATUS,            UNIT_BITFIELD,  0},
-  {I2C_JETCAT,       1,  uint8bcd,  STR_SENSOR_THROTTLE,          UNIT_PERCENT,   0},
-  {I2C_JETCAT,       2,  uint16bcd, STR_SENSOR_A1,                UNIT_VOLTS,     2},
-  {I2C_JETCAT,       4,  uint16bcd, STR_SENSOR_A2,                UNIT_VOLTS,     2},
-  {I2C_JETCAT,       6,  uint32bcd, STR_SENSOR_RPM,               UNIT_RPMS,      0},
-  {I2C_JETCAT,      10,  uint16bcd, STR_SENSOR_TEMP1,             UNIT_CELSIUS,   0},
+//SS(I2C_JETCAT,       0,  uint8,     STR_SENSOR_STATUS,            UNIT_BITFIELD,  0),
+  SS(I2C_JETCAT,       1,  uint8bcd,  STR_SENSOR_THROTTLE,          UNIT_PERCENT,   0),
+  SS(I2C_JETCAT,       2,  uint16bcd, STR_SENSOR_A1,                UNIT_VOLTS,     2),
+  SS(I2C_JETCAT,       4,  uint16bcd, STR_SENSOR_A2,                UNIT_VOLTS,     2),
+  SS(I2C_JETCAT,       6,  uint32bcd, STR_SENSOR_RPM,               UNIT_RPMS,      0),
+  SS(I2C_JETCAT,      10,  uint16bcd, STR_SENSOR_TEMP1,             UNIT_CELSIUS,   0),
 
   // 0x16  GPS LOG
-  {I2C_GPS_LOC,      0,  uint16bcd,  STR_SENSOR_GPSALT,           UNIT_METERS,    1}, // Atl-Low BCD 3.1
-  {I2C_GPS_LOC,      2,  uint32bcd,  STR_SENSOR_GPS,              UNIT_GPS,       0}, // LAT and LON
-  {I2C_GPS_LOC,     10,  uint16bcd,  STR_SENSOR_HDG,              UNIT_DEGREE,    1}, // Course BCD 3.1
-//{I2C_GPS_LOC,     12,  uint8bcd,   STR_SENSOR_HDOP ?,           UNIT_RAW,       1}, // HDOP BCD 1.1
+  SS(I2C_GPS_LOC,      0,  uint16bcd,  STR_SENSOR_GPSALT,           UNIT_METERS,    1), // Atl-Low BCD 3.1
+  SS(I2C_GPS_LOC,      2,  uint32bcd,  STR_SENSOR_GPS,              UNIT_GPS,       0), // LAT and LON
+  SS(I2C_GPS_LOC,     10,  uint16bcd,  STR_SENSOR_HDG,              UNIT_DEGREE,    1), // Course BCD 3.1
+//SS(I2C_GPS_LOC,     12,  uint8bcd,   STR_SENSOR_HDOP ?,           UNIT_RAW,       1), // HDOP BCD 1.1
 
   // 0x17  GPS STAT
-  {I2C_GPS_STAT,     0,  uint16bcd, STR_SENSOR_GSPD,              UNIT_KTS,       1}, // BCD 3.1
-  {I2C_GPS_STAT,     2,  uint32bcd, STR_SENSOR_GPSDATETIME,       UNIT_DATETIME,  1}, // BCD 6.1 HH:MM:SS.S
-  {I2C_GPS_STAT,     6,  uint8bcd,  STR_SENSOR_SATELLITES,        UNIT_RAW,       0}, // BCD 2.0
+  SS(I2C_GPS_STAT,     0,  uint16bcd, STR_SENSOR_GSPD,              UNIT_KTS,       1), // BCD 3.1
+  SS(I2C_GPS_STAT,     2,  uint32bcd, STR_SENSOR_GPSDATETIME,       UNIT_DATETIME,  1), // BCD 6.1 HH:MM:SS.S
+  SS(I2C_GPS_STAT,     6,  uint8bcd,  STR_SENSOR_SATELLITES,        UNIT_RAW,       0), // BCD 2.0
  
   // 0x18  Dual Batt Capacity monitor - Receiver
-  {I2C_RX_BATT,      0,  int16,     STR_SENSOR_BATT1_CURRENT,     UNIT_AMPS,      2}, // Instantaneous current, 0.01A (0-327.66A)
-  {I2C_RX_BATT,      2,  uint16,    STR_SENSOR_BATT1_CONSUMPTION, UNIT_MAH,       1}, // Integrated mAh used, 0.1mAh (0-3276.6mAh)
-  {I2C_RX_BATT,      4,  uint16,    STR_SENSOR_BATT1_VOLTAGE,     UNIT_VOLTS,     2}, // Volts, 0.01V increments (0-16.00V)
-  {I2C_RX_BATT,      6,  int16,     STR_SENSOR_BATT1_CURRENT,     UNIT_AMPS,      2}, // Instantaneous current, 0.01A (0-327.66A)
-  {I2C_RX_BATT,      8,  uint16,    STR_SENSOR_BATT1_CONSUMPTION, UNIT_MAH,       1}, // Integrated mAh used, 0.1mAh (0-3276.6mAh)
-  {I2C_RX_BATT,     10,  uint16,    STR_SENSOR_BATT1_VOLTAGE,     UNIT_VOLTS,     2}, // Volts, 0.01V increments (0-16.00V)
+  SS(I2C_RX_BATT,      0,  int16,     STR_SENSOR_BATT1_CURRENT,     UNIT_AMPS,      2), // Instantaneous current, 0.01A (0-327.66A)
+  SS(I2C_RX_BATT,      2,  uint16,    STR_SENSOR_BATT1_CONSUMPTION, UNIT_MAH,       1), // Integrated mAh used, 0.1mAh (0-3276.6mAh)
+  SS(I2C_RX_BATT,      4,  uint16,    STR_SENSOR_BATT1_VOLTAGE,     UNIT_VOLTS,     2), // Volts, 0.01V increments (0-16.00V)
+  SS(I2C_RX_BATT,      6,  int16,     STR_SENSOR_BATT1_CURRENT,     UNIT_AMPS,      2), // Instantaneous current, 0.01A (0-327.66A)
+  SS(I2C_RX_BATT,      8,  uint16,    STR_SENSOR_BATT1_CONSUMPTION, UNIT_MAH,       1), // Integrated mAh used, 0.1mAh (0-3276.6mAh)
+  SS(I2C_RX_BATT,     10,  uint16,    STR_SENSOR_BATT1_VOLTAGE,     UNIT_VOLTS,     2), // Volts, 0.01V increments (0-16.00V)
 
   // 0x19 Jetcat flow rate
-//{I2C_JETCAT_2,     0,  uint16bcd, STR_SENSOR_FUEL_CONSUMPTION,  UNIT_MILLILITERS_PER_MINUTE, 1}, missing ml/min
-  {I2C_JETCAT_2,     2,  uint32bcd, STR_SENSOR_FUEL,              UNIT_MILLILITERS, 1},
+//SS(I2C_JETCAT_2,     0,  uint16bcd, STR_SENSOR_FUEL_CONSUMPTION,  UNIT_MILLILITERS_PER_MINUTE, 1), missing ml/min
+  SS(I2C_JETCAT_2,     2,  uint32bcd, STR_SENSOR_FUEL,              UNIT_MILLILITERS, 1),
 
   // 0x1a Gyro
-  {I2C_GYRO,         0,  int16,     STR_SENSOR_GYROX,             UNIT_DEGREE,    1}, // Units are 0.1 deg/sec
-  {I2C_GYRO,         2,  int16,     STR_SENSOR_GYROY,             UNIT_DEGREE,    1},
-  {I2C_GYRO,         4,  int16,     STR_SENSOR_GYROZ,             UNIT_DEGREE,    1},
- //{I2C_GYRO,        6,  int16,     STR_SENSOR_MAX_GYROX ?,       UNIT_DEGREE,    1}, // abs (max)
- //{I2C_GYRO,        8,  int16,     STR_SENSOR_MAX_GYROY ?,       UNIT_DEGREE,    1},
- //{I2C_GYRO,       10,  int16,     STR_SENSOR_MAX_GYROZ ?,       UNIT_DEGREE,    1},
+  SS(I2C_GYRO,         0,  int16,     STR_SENSOR_GYROX,             UNIT_DEGREE,    1), // Units are 0.1 deg/sec
+  SS(I2C_GYRO,         2,  int16,     STR_SENSOR_GYROY,             UNIT_DEGREE,    1),
+  SS(I2C_GYRO,         4,  int16,     STR_SENSOR_GYROZ,             UNIT_DEGREE,    1),
+ //SS(I2C_GYRO,        6,  int16,     STR_SENSOR_MAX_GYROX ?,       UNIT_DEGREE,    1), // abs (max)
+ //SS(I2C_GYRO,        8,  int16,     STR_SENSOR_MAX_GYROY ?,       UNIT_DEGREE,    1),
+ //SS(I2C_GYRO,       10,  int16,     STR_SENSOR_MAX_GYROZ ?,       UNIT_DEGREE,    1),
 
   // 0x1b Attitude & Mag Compass
   // mag Units are tbd so probably no sensor in existance, ignore them for now
-  {I2C_ATTMAG,       0,  int16,     STR_SENSOR_ROLL,              UNIT_DEGREE,    1}, // Attitude, 3 axes.
-  {I2C_ATTMAG,       2,  int16,     STR_SENSOR_PITCH,             UNIT_DEGREE,    1}, // Units are 0.1 deg
-  {I2C_ATTMAG,       4,  int16,     STR_SENSOR_YAW,               UNIT_DEGREE,    1},
-//{I2C_ATTMAG,       6,  int16,     STR_SENSOR_MAGX ?,            ??,             1}, // Magnetic Compass, 3 axes
-//{I2C_ATTMAG,       8,  int16,     STR_SENSOR_MAGY ?,            ??,             1}, // Units are 0.1mG
-//{I2C_ATTMAG,      10,  int16,     STR_SENSOR_MAXZ ?,            ??,             1},
-//{I2C_ATTMAG,      12,  int16,     STR_SENSOR_HDG ?,             UNIT_DEGREE,    1}, // Heading, 0.1deg
+  SS(I2C_ATTMAG,       0,  int16,     STR_SENSOR_ROLL,              UNIT_DEGREE,    1), // Attitude, 3 axes.
+  SS(I2C_ATTMAG,       2,  int16,     STR_SENSOR_PITCH,             UNIT_DEGREE,    1), // Units are 0.1 deg
+  SS(I2C_ATTMAG,       4,  int16,     STR_SENSOR_YAW,               UNIT_DEGREE,    1),
+//SS(I2C_ATTMAG,       6,  int16,     STR_SENSOR_MAGX ?,            ??,             1), // Magnetic Compass, 3 axes
+//SS(I2C_ATTMAG,       8,  int16,     STR_SENSOR_MAGY ?,            ??,             1), // Units are 0.1mG
+//SS(I2C_ATTMAG,      10,  int16,     STR_SENSOR_MAXZ ?,            ??,             1),
+//SS(I2C_ATTMAG,      12,  int16,     STR_SENSOR_HDG ?,             UNIT_DEGREE,    1), // Heading, 0.1deg
 
   // 0x20 Smart ESC telemetry
-  {I2C_ESC,          0,  uint16,    STR_SENSOR_ESC_RPM2,          UNIT_RPMS,      0}, // Electrical RPM, 10RPM (0-655340 RPM)
-  {I2C_ESC,          2,  uint16,    STR_SENSOR_ESC_VIN,           UNIT_VOLTS,     2}, // Volts, 0.01v (0-655.34V)
-  {I2C_ESC,          4,  uint16,    STR_SENSOR_ESC_TFET,          UNIT_CELSIUS,   1}, // Temperature, 0.1C (0-6553.4C)
-  {I2C_ESC,          6,  uint16,    STR_SENSOR_ESC_CUR,           UNIT_AMPS,      2}, // Current, 10mA (0-655.34A)
-  {I2C_ESC,          8,  uint16,    STR_SENSOR_ESC_TBEC,          UNIT_CELSIUS,   1}, // Temperature, 0.1C (0-6553.4C)
-  {I2C_ESC,         10,  uint8,     STR_SENSOR_ESC_BCUR,          UNIT_AMPS,      1}, // BEC Current, 100mA (0-25.4A)
-  {I2C_ESC,         11,  uint8,     STR_SENSOR_ESC_VBEC,          UNIT_VOLTS,     2}, // BEC Volts, 0.05V (0-12.70V)
-  {I2C_ESC,         12,  uint8,     STR_SENSOR_ESC_THR,           UNIT_PERCENT,   0}, // 0.5% (0-100%)
-  {I2C_ESC,         13,  uint8,     STR_SENSOR_ESC_POUT,          UNIT_PERCENT,   0}, // Power Output, 0.5% (0-127%)
+  SS(I2C_ESC,          0,  uint16,    STR_SENSOR_ESC_RPM2,          UNIT_RPMS,      0), // Electrical RPM, 10RPM (0-655340 RPM)
+  SS(I2C_ESC,          2,  uint16,    STR_SENSOR_ESC_VIN,           UNIT_VOLTS,     2), // Volts, 0.01v (0-655.34V)
+  SS(I2C_ESC,          4,  uint16,    STR_SENSOR_ESC_TFET,          UNIT_CELSIUS,   1), // Temperature, 0.1C (0-6553.4C)
+  SS(I2C_ESC,          6,  uint16,    STR_SENSOR_ESC_CUR,           UNIT_AMPS,      2), // Current, 10mA (0-655.34A)
+  SS(I2C_ESC,          8,  uint16,    STR_SENSOR_ESC_TBEC,          UNIT_CELSIUS,   1), // Temperature, 0.1C (0-6553.4C)
+  SS(I2C_ESC,         10,  uint8,     STR_SENSOR_ESC_BCUR,          UNIT_AMPS,      1), // BEC Current, 100mA (0-25.4A)
+  SS(I2C_ESC,         11,  uint8,     STR_SENSOR_ESC_VBEC,          UNIT_VOLTS,     2), // BEC Volts, 0.05V (0-12.70V)
+  SS(I2C_ESC,         12,  uint8,     STR_SENSOR_ESC_THR,           UNIT_PERCENT,   0), // 0.5% (0-100%)
+  SS(I2C_ESC,         13,  uint8,     STR_SENSOR_ESC_POUT,          UNIT_PERCENT,   0), // Power Output, 0.5% (0-127%)
 
   // 0x26 GPS Binary
-  {I2C_GPS_BIN,      0,  uint16,    STR_SENSOR_GPSALT,            UNIT_METERS,    0}, // altitude m, 1000m offset
-  {I2C_GPS_BIN,      2,  int32,     STR_SENSOR_GPS,               UNIT_GPS,       0}, // latitude+long degree / 10,000,000
-  {I2C_GPS_BIN,     10,  uint16,    STR_SENSOR_HDG,               UNIT_DEGREE,    1}, // heading/course degree / 10
-  {I2C_GPS_BIN,     12,  uint8,     STR_SENSOR_GSPD,              UNIT_KMH,       0}, // ground speed Km/h
-  {I2C_GPS_BIN,     13,  uint8,     STR_SENSOR_SATELLITES,        UNIT_RAW,       0}, // count
+  SS(I2C_GPS_BIN,      0,  uint16,    STR_SENSOR_GPSALT,            UNIT_METERS,    0), // altitude m, 1000m offset
+  SS(I2C_GPS_BIN,      2,  int32,     STR_SENSOR_GPS,               UNIT_GPS,       0), // latitude+long degree / 10,000,000
+  SS(I2C_GPS_BIN,     10,  uint16,    STR_SENSOR_HDG,               UNIT_DEGREE,    1), // heading/course degree / 10
+  SS(I2C_GPS_BIN,     12,  uint8,     STR_SENSOR_GSPD,              UNIT_KMH,       0), // ground speed Km/h
+  SS(I2C_GPS_BIN,     13,  uint8,     STR_SENSOR_SATELLITES,        UNIT_RAW,       0), // count
 
   // 0x34 Dual Batt Capacity monitor - Flight Pack
   // The difference with sensor 0x18 (RX capacity monitor) is the consumption magnitude. 
   // RX (0x18) is up to 3.2A, and flight pack is up to 32A (x 10 or 1 decimal place)
   // Right now they have the same sensor name... could this sensors (0x18 and 0x34) be used at the same time? 
-  {I2C_FP_BATT,       0,  int16le,     STR_SENSOR_BATT1_CURRENT,     UNIT_AMPS,     1}, // Instantaneous current, 0.1A (0-3276.6A)
-  {I2C_FP_BATT,       2,  int16le,     STR_SENSOR_BATT1_CONSUMPTION, UNIT_MAH,      0}, // Integrated mAh used, 1mAh (0-32.766Ah)
-  {I2C_FP_BATT,       4,  int16le,     STR_SENSOR_BATT1_TEMP,        UNIT_CELSIUS,  1}, // Temperature, 0.1C (0-150C)
-  {I2C_FP_BATT,       6,  int16le,     STR_SENSOR_BATT2_CURRENT,     UNIT_AMPS,     1}, // Instantaneous current, 0.1A (0-3276.6A)
-  {I2C_FP_BATT,       8,  int16le,     STR_SENSOR_BATT2_CONSUMPTION, UNIT_MAH,      0}, // Integrated mAh used, 1mAh (0-32.766Ah)
-  {I2C_FP_BATT,      10,  int16le,     STR_SENSOR_BATT2_TEMP,        UNIT_CELSIUS,  1}, // Temperature, 0.1C (0-150C)
+  SS(I2C_FP_BATT,       0,  int16le,     STR_SENSOR_BATT1_CURRENT,     UNIT_AMPS,     1), // Instantaneous current, 0.1A (0-3276.6A)
+  SS(I2C_FP_BATT,       2,  int16le,     STR_SENSOR_BATT1_CONSUMPTION, UNIT_MAH,      0), // Integrated mAh used, 1mAh (0-32.766Ah)
+  SS(I2C_FP_BATT,       4,  int16le,     STR_SENSOR_BATT1_TEMP,        UNIT_CELSIUS,  1), // Temperature, 0.1C (0-150C)
+  SS(I2C_FP_BATT,       6,  int16le,     STR_SENSOR_BATT2_CURRENT,     UNIT_AMPS,     1), // Instantaneous current, 0.1A (0-3276.6A)
+  SS(I2C_FP_BATT,       8,  int16le,     STR_SENSOR_BATT2_CONSUMPTION, UNIT_MAH,      0), // Integrated mAh used, 1mAh (0-32.766Ah)
+  SS(I2C_FP_BATT,      10,  int16le,     STR_SENSOR_BATT2_TEMP,        UNIT_CELSIUS,  1), // Temperature, 0.1C (0-150C)
 
   // Tank pressure + custom input bits (ignore for now)
-//{0x38,              0,  uint16,    STR_SENSOR_STATUS_BITS,      UNIT_BITFIELD,  0},
-//{0x38,              0,  uint16,    STR_SENSOR_PRESSSURE,        UNIT_PSI,       1},
+//SS(0x38,              0,  uint16,    STR_SENSOR_STATUS_BITS,      UNIT_BITFIELD,  0),
+//SS(0x38,              0,  uint16,    STR_SENSOR_PRESSSURE,        UNIT_PSI,       1),
 
   // 0x3A Lipo 6s Monitor Cells
-  {I2C_CELLS,        0,  uint16,    STR_SENSOR_CELLS,             UNIT_VOLTS,     2}, // Voltage across cell 1, .01V steps
-  {I2C_CELLS,        2,  uint16,    STR_SENSOR_CELLS,             UNIT_VOLTS,     2},
-  {I2C_CELLS,        4,  uint16,    STR_SENSOR_CELLS,             UNIT_VOLTS,     2},
-  {I2C_CELLS,        6,  uint16,    STR_SENSOR_CELLS,             UNIT_VOLTS,     2},
-  {I2C_CELLS,        8,  uint16,    STR_SENSOR_CELLS,             UNIT_VOLTS,     2},
-  {I2C_CELLS,       10,  uint16,    STR_SENSOR_CELLS,             UNIT_VOLTS,     2},
-  {I2C_CELLS,       12,  uint16,    STR_SENSOR_TEMP2,             UNIT_CELSIUS,   2}, // Temperature, 0.1C (0-655.34C)
+  SS(I2C_CELLS,        0,  uint16,    STR_SENSOR_CL01,              UNIT_VOLTS,     2), // Voltage across cell 1, .01V steps
+  SS(I2C_CELLS,        2,  uint16,    STR_SENSOR_CL02,              UNIT_VOLTS,     2),
+  SS(I2C_CELLS,        4,  uint16,    STR_SENSOR_CL03,              UNIT_VOLTS,     2),
+  SS(I2C_CELLS,        6,  uint16,    STR_SENSOR_CL04,              UNIT_VOLTS,     2),
+  SS(I2C_CELLS,        8,  uint16,    STR_SENSOR_CL05,              UNIT_VOLTS,     2),
+  SS(I2C_CELLS,       10,  uint16,    STR_SENSOR_CL06,              UNIT_VOLTS,     2),
+  SS(I2C_CELLS,       12,  uint16,    STR_SENSOR_TEMP2,             UNIT_CELSIUS,   1), // Temperature, 0.1C (0-655.34C)
 
   // 0x40 Vario-S
-  {I2C_VARIO,         0,  int16,     STR_SENSOR_ALT,               UNIT_METERS,            1},
-  {I2C_VARIO,         2,  int16,     STR_SENSOR_VSPD,              UNIT_METERS_PER_SECOND, 1},
+  SS(I2C_VARIO,         0,  int16,     STR_SENSOR_ALT,               UNIT_METERS,            1),
+  SS(I2C_VARIO,         2,  int16,     STR_SENSOR_VSPD,              UNIT_METERS_PER_SECOND, 1),
 
   // 0x42 Smartbat
-//{I2C_SMART_BAT_REALTIME,     1,  int8,      STR_SMART_BAT_BTMP,    UNIT_CELSIUS,             0},  // disabled because sensor is a duplicate of cells sensors ones
-  {I2C_SMART_BAT_REALTIME,     2,  uint32le,  STR_SENSOR_SMART_BAT_BCUR,    UNIT_MAH,    0},
-  {I2C_SMART_BAT_REALTIME,     6,  uint16le,  STR_SENSOR_SMART_BAT_BCAP,    UNIT_MAH,    0},
-  {I2C_SMART_BAT_REALTIME,     8,  uint16le,  STR_SENSOR_SMART_BAT_MIN_CEL, UNIT_VOLTS,  2},
-  {I2C_SMART_BAT_REALTIME,    10,  uint16le,  STR_SENSOR_SMART_BAT_MAX_CEL, UNIT_VOLTS,  2},
-//{I2C_SMART_BAT_REALTIME,    12,  uint16le,  "RFU[2]",                     UNIT_RAW,    0},   // disabled to save sensors slots
+//SS(I2C_SMART_BAT_REALTIME,     1,  int8,      STR_SMART_BAT_BTMP,    UNIT_CELSIUS,             0),  // disabled because sensor is a duplicate of cells sensors ones
+  SS(I2C_SMART_BAT_REALTIME,     2,  uint32le,  STR_SENSOR_SMART_BAT_BCUR,    UNIT_MAH,    0),
+  SS(I2C_SMART_BAT_REALTIME,     6,  uint16le,  STR_SENSOR_SMART_BAT_BCAP,    UNIT_MAH,    0),
+  SS(I2C_SMART_BAT_REALTIME,     8,  uint16le,  STR_SENSOR_SMART_BAT_MIN_CEL, UNIT_VOLTS,  2),
+  SS(I2C_SMART_BAT_REALTIME,    10,  uint16le,  STR_SENSOR_SMART_BAT_MAX_CEL, UNIT_VOLTS,  2),
+//SS(I2C_SMART_BAT_REALTIME,    12,  uint16le,  "RFU[2]",                     UNIT_RAW,    0),   // disabled to save sensors slots
 
-  {I2C_SMART_BAT_CELLS_1_6,    1,  int8,      STR_SENSOR_SMART_BAT_BTMP,    UNIT_CELSIUS,  0},
-  {I2C_SMART_BAT_CELLS_1_6,    2,  uint16le,  STR_SENSOR_CL01,              UNIT_VOLTS,    2},
-  {I2C_SMART_BAT_CELLS_1_6,    4,  uint16le,  STR_SENSOR_CL02,              UNIT_VOLTS,    2},
-  {I2C_SMART_BAT_CELLS_1_6,    6,  uint16le,  STR_SENSOR_CL03,              UNIT_VOLTS,    2},
-  {I2C_SMART_BAT_CELLS_1_6,    8,  uint16le,  STR_SENSOR_CL04,              UNIT_VOLTS,    2},
-  {I2C_SMART_BAT_CELLS_1_6,   10,  uint16le,  STR_SENSOR_CL05,              UNIT_VOLTS,    2},
-  {I2C_SMART_BAT_CELLS_1_6,   12,  uint16le,  STR_SENSOR_CL06,              UNIT_VOLTS,    2},
+  SS(I2C_SMART_BAT_CELLS_1_6,    1,  int8,      STR_SENSOR_SMART_BAT_BTMP,    UNIT_CELSIUS,  0),
+  SS(I2C_SMART_BAT_CELLS_1_6,    2,  uint16le,  STR_SENSOR_CL01,              UNIT_VOLTS,    2),
+  SS(I2C_SMART_BAT_CELLS_1_6,    4,  uint16le,  STR_SENSOR_CL02,              UNIT_VOLTS,    2),
+  SS(I2C_SMART_BAT_CELLS_1_6,    6,  uint16le,  STR_SENSOR_CL03,              UNIT_VOLTS,    2),
+  SS(I2C_SMART_BAT_CELLS_1_6,    8,  uint16le,  STR_SENSOR_CL04,              UNIT_VOLTS,    2),
+  SS(I2C_SMART_BAT_CELLS_1_6,   10,  uint16le,  STR_SENSOR_CL05,              UNIT_VOLTS,    2),
+  SS(I2C_SMART_BAT_CELLS_1_6,   12,  uint16le,  STR_SENSOR_CL06,              UNIT_VOLTS,    2),
 
-  {I2C_SMART_BAT_CELLS_7_12,   1,  int8,      STR_SENSOR_SMART_BAT_BTMP,    UNIT_CELSIUS,  0},
-  {I2C_SMART_BAT_CELLS_7_12,   2,  uint16le,  STR_SENSOR_CL07,              UNIT_VOLTS,    2},
-  {I2C_SMART_BAT_CELLS_7_12,   4,  uint16le,  STR_SENSOR_CL08,              UNIT_VOLTS,    2},
-  {I2C_SMART_BAT_CELLS_7_12,   6,  uint16le,  STR_SENSOR_CL09,              UNIT_VOLTS,    2},
-  {I2C_SMART_BAT_CELLS_7_12,   8,  uint16le,  STR_SENSOR_CL10,              UNIT_VOLTS,    2},
-  {I2C_SMART_BAT_CELLS_7_12,  10,  uint16le,  STR_SENSOR_CL11,              UNIT_VOLTS,    2},
-  {I2C_SMART_BAT_CELLS_7_12,  12,  uint16le,  STR_SENSOR_CL12,              UNIT_VOLTS,    2},
+  SS(I2C_SMART_BAT_CELLS_7_12,   1,  int8,      STR_SENSOR_SMART_BAT_BTMP,    UNIT_CELSIUS,  0),
+  SS(I2C_SMART_BAT_CELLS_7_12,   2,  uint16le,  STR_SENSOR_CL07,              UNIT_VOLTS,    2),
+  SS(I2C_SMART_BAT_CELLS_7_12,   4,  uint16le,  STR_SENSOR_CL08,              UNIT_VOLTS,    2),
+  SS(I2C_SMART_BAT_CELLS_7_12,   6,  uint16le,  STR_SENSOR_CL09,              UNIT_VOLTS,    2),
+  SS(I2C_SMART_BAT_CELLS_7_12,   8,  uint16le,  STR_SENSOR_CL10,              UNIT_VOLTS,    2),
+  SS(I2C_SMART_BAT_CELLS_7_12,  10,  uint16le,  STR_SENSOR_CL11,              UNIT_VOLTS,    2),
+  SS(I2C_SMART_BAT_CELLS_7_12,  12,  uint16le,  STR_SENSOR_CL12,              UNIT_VOLTS,    2),
 
-  {I2C_SMART_BAT_CELLS_13_18,  1,  int8,     STR_SENSOR_SMART_BAT_BTMP,     UNIT_CELSIUS,  0},
-  {I2C_SMART_BAT_CELLS_13_18,  2,  uint16le, STR_SENSOR_CL13,               UNIT_VOLTS,    2},
-  {I2C_SMART_BAT_CELLS_13_18,  4,  uint16le, STR_SENSOR_CL14,               UNIT_VOLTS,    2},
-  {I2C_SMART_BAT_CELLS_13_18,  6,  uint16le, STR_SENSOR_CL15,               UNIT_VOLTS,    2},
-  {I2C_SMART_BAT_CELLS_13_18,  8,  uint16le, STR_SENSOR_CL16,               UNIT_VOLTS,    2},
-  {I2C_SMART_BAT_CELLS_13_18, 10,  uint16le, STR_SENSOR_CL17,               UNIT_VOLTS,    2},
-  {I2C_SMART_BAT_CELLS_13_18, 12,  uint16le, STR_SENSOR_CL18,               UNIT_VOLTS,    2},
+  SS(I2C_SMART_BAT_CELLS_13_18,  1,  int8,     STR_SENSOR_SMART_BAT_BTMP,     UNIT_CELSIUS,  0),
+  SS(I2C_SMART_BAT_CELLS_13_18,  2,  uint16le, STR_SENSOR_CL13,               UNIT_VOLTS,    2),
+  SS(I2C_SMART_BAT_CELLS_13_18,  4,  uint16le, STR_SENSOR_CL14,               UNIT_VOLTS,    2),
+  SS(I2C_SMART_BAT_CELLS_13_18,  6,  uint16le, STR_SENSOR_CL15,               UNIT_VOLTS,    2),
+  SS(I2C_SMART_BAT_CELLS_13_18,  8,  uint16le, STR_SENSOR_CL16,               UNIT_VOLTS,    2),
+  SS(I2C_SMART_BAT_CELLS_13_18, 10,  uint16le, STR_SENSOR_CL17,               UNIT_VOLTS,    2),
+  SS(I2C_SMART_BAT_CELLS_13_18, 12,  uint16le, STR_SENSOR_CL18,               UNIT_VOLTS,    2),
 
-  //{I2C_SMART_BAT_ID,              1,  uint8,  "chemistery",  UNIT_RAW, 0},   // disabled to save sensors slots
-  //{I2C_SMART_BAT_ID,              2,  uint8,  "number of cells",  UNIT_RAW, 0},   // disabled to save sensors slots
-  //{I2C_SMART_BAT_ID,              3,  uint8,  "manufacturer code",  UNIT_RAW, 0},   // disabled to save sensors slots
-  {I2C_SMART_BAT_ID,              4,  uint16le,  STR_SENSOR_SMART_BAT_CYCLES,  UNIT_RAW,                 0},
-  //{I2C_SMART_BAT_ID,              6,  uint8,  "uniqueID[8]",  UNIT_RAW, 0},   // disabled to save sensors slots
+  //SS(I2C_SMART_BAT_ID,              1,  uint8,  "chemistery",  UNIT_RAW, 0),   // disabled to save sensors slots
+  //SS(I2C_SMART_BAT_ID,              2,  uint8,  "number of cells",  UNIT_RAW, 0),   // disabled to save sensors slots
+  //SS(I2C_SMART_BAT_ID,              3,  uint8,  "manufacturer code",  UNIT_RAW, 0),   // disabled to save sensors slots
+  SS(I2C_SMART_BAT_ID,              4,  uint16le,  STR_SENSOR_SMART_BAT_CYCLES,  UNIT_RAW,                 0),
+  //SS(I2C_SMART_BAT_ID,              6,  uint8,  "uniqueID[8]",  UNIT_RAW, 0),   // disabled to save sensors slots
 
-  //{I2C_SMART_BAT_LIMITS,          1,  uint8,  "rfu",  UNIT_RAW, 0},   // disabled to save sensors slots
-  {I2C_SMART_BAT_LIMITS,          2,  uint16le,  STR_SENSOR_SMART_BAT_CAPACITY,UNIT_MAH,                 0},
-  //{I2C_SMART_BAT_LIMITS,          4,  uint16le,  "dischargeCurrentRating",  UNIT_RAW, 0},   // disabled to save sensors slots
-  //{I2C_SMART_BAT_LIMITS,          6,  uint16le,  "overDischarge_mV",  UNIT_RAW, 0},   // disabled to save sensors slots
-  //{I2C_SMART_BAT_LIMITS,          8,  uint16le,  "zeroCapacity_mV",  UNIT_RAW, 0},   // disabled to save sensors slots
-  //{I2C_SMART_BAT_LIMITS,          10,  uint16le,  "fullyCharged_mV",  UNIT_RAW, 0},   // disabled to save sensors slots
-  //{I2C_SMART_BAT_LIMITS,          12,  uint8,  "minWorkingTemp",  UNIT_RAW, 0},   // disabled to save sensors slots
-  //{I2C_SMART_BAT_LIMITS,          13,  uint8,  "maxWorkingTemp",  UNIT_RAW, 0},   // disabled to save sensors slots
+  //SS(I2C_SMART_BAT_LIMITS,          1,  uint8,  "rfu",  UNIT_RAW, 0),   // disabled to save sensors slots
+  SS(I2C_SMART_BAT_LIMITS,          2,  uint16le,  STR_SENSOR_SMART_BAT_CAPACITY,UNIT_MAH,                 0),
+  //SS(I2C_SMART_BAT_LIMITS,          4,  uint16le,  "dischargeCurrentRating",  UNIT_RAW, 0),   // disabled to save sensors slots
+  //SS(I2C_SMART_BAT_LIMITS,          6,  uint16le,  "overDischarge_mV",  UNIT_RAW, 0),   // disabled to save sensors slots
+  //SS(I2C_SMART_BAT_LIMITS,          8,  uint16le,  "zeroCapacity_mV",  UNIT_RAW, 0),   // disabled to save sensors slots
+  //SS(I2C_SMART_BAT_LIMITS,          10,  uint16le,  "fullyCharged_mV",  UNIT_RAW, 0),   // disabled to save sensors slots
+  //SS(I2C_SMART_BAT_LIMITS,          12,  uint8,  "minWorkingTemp",  UNIT_RAW, 0),   // disabled to save sensors slots
+  //SS(I2C_SMART_BAT_LIMITS,          13,  uint8,  "maxWorkingTemp",  UNIT_RAW, 0),   // disabled to save sensors slots
 
   // 0x50-0x56 custom 3rd party sensors
-  //{0x50, 0, int16, STR_SENSOR_}
+  //SS(0x50, 0, int16, STR_SENSOR_)
 
   // 0x7d are transmitter channels frame data [7], probably only available on the Spektrum
   // telemetry bus on the model itself
 
   // 0x7E RPM/Volts/Temperature
-  {I2C_RPM,          0,  uint16,    STR_SENSOR_RPM,               UNIT_RPMS,       0}, // microseconds between pulse leading edges
-  {I2C_RPM,          2,  uint16,    STR_SENSOR_A3,                UNIT_VOLTS,      2}, // 0.01V increments (typically flight pack voltage)
-  {I2C_RPM,          4,  int16,     STR_SENSOR_TEMP2,             UNIT_FAHRENHEIT, 0}, // Temperature in degrees F.
+  SS(I2C_RPM,          0,  uint16,    STR_SENSOR_RPM,               UNIT_RPMS,       0), // microseconds between pulse leading edges
+  SS(I2C_RPM,          2,  uint16,    STR_SENSOR_A3,                UNIT_VOLTS,      2), // 0.01V increments (typically flight pack voltage)
+  SS(I2C_RPM,          4,  int16,     STR_SENSOR_TEMP2,             UNIT_FAHRENHEIT, 0), // Temperature in degrees F.
 
   // 0x7f, QoS DATA, also called Flight Log
-  {I2C_QOS,          0,  uint16,    STR_SENSOR_QOS_A,             UNIT_RAW,       0}, // A - Antenna Fades on Receiver A
-  {I2C_QOS,          2,  uint16,    STR_SENSOR_QOS_B,             UNIT_RAW,       0}, // B - Antenna Fades on Receiver B
-  {I2C_QOS,          4,  uint16,    STR_SENSOR_QOS_L,             UNIT_RAW,       0}, // L - Antenna Fades on left Receiver
-  {I2C_QOS,          6,  uint16,    STR_SENSOR_QOS_R,             UNIT_RAW,       0}, // R - Antenna Fades on right Receiver
-  {I2C_QOS,          8,  uint16,    STR_SENSOR_QOS_F,             UNIT_RAW,       0}, // F - Frame losses.
-  {I2C_QOS,          10, uint16,    STR_SENSOR_QOS_H,             UNIT_RAW,       0}, // H - Holds
-  {I2C_QOS,          12, uint16,    STR_SENSOR_A2,                UNIT_VOLTS,     2}, // Volts, .01V increment.
+  SS(I2C_QOS,          0,  uint16,    STR_SENSOR_QOS_A,             UNIT_RAW,       0), // A - Antenna Fades on Receiver A
+  SS(I2C_QOS,          2,  uint16,    STR_SENSOR_QOS_B,             UNIT_RAW,       0), // B - Antenna Fades on Receiver B
+  SS(I2C_QOS,          4,  uint16,    STR_SENSOR_QOS_L,             UNIT_RAW,       0), // L - Antenna Fades on left Receiver
+  SS(I2C_QOS,          6,  uint16,    STR_SENSOR_QOS_R,             UNIT_RAW,       0), // R - Antenna Fades on right Receiver
+  SS(I2C_QOS,          8,  uint16,    STR_SENSOR_QOS_F,             UNIT_RAW,       0), // F - Frame losses.
+  SS(I2C_QOS,          10, uint16,    STR_SENSOR_QOS_H,             UNIT_RAW,       0), // H - Holds
+  SS(I2C_QOS,          12, uint16,    STR_SENSOR_A2,                UNIT_VOLTS,     2), // Volts, .01V increment.
 
-  {I2C_PSEUDO_TX,    0,  uint8,     STR_SENSOR_TX_RSSI,           UNIT_RAW,       0},
-  {I2C_PSEUDO_TX,    4,  uint32,    STR_SENSOR_BIND,              UNIT_RAW,       0},
-  {I2C_PSEUDO_TX,    8,  uint32,    STR_SENSOR_FLIGHT_MODE,       UNIT_TEXT,      0},
-  {0,                0,  int16,     NULL,                   UNIT_RAW,             0} //sentinel
+  SS(I2C_PSEUDO_TX,    0,  uint8,     STR_SENSOR_TX_RSSI,           UNIT_RAW,       0),
+  SS(I2C_PSEUDO_TX,    4,  uint32,    STR_SENSOR_BIND,              UNIT_RAW,       0),
+  SS(I2C_PSEUDO_TX,    8,  uint32,    STR_SENSOR_FLIGHT_MODE,       UNIT_TEXT,      0),
+  SS(I2C_PSEUDO_TX,    10, uint32,    STR_SENSOR_CELLS,             UNIT_CELLS,     2),
+  SS(0,                0,  int16,     NULL,                         UNIT_RAW,       0) //sentinel
 };
+// clang-format on
 
 // Alt Low and High needs to be combined (in 2 diff packets)
 static uint8_t gpsAltHigh = 0;
+static bool varioTelemetry = false;
+static bool flightPackTelemetry = false;
 
 // Helper function declared later
 static void processAS3XPacket(const uint8_t *packet);
@@ -503,6 +513,10 @@ static void processGPSLocPacket(const uint8_t *packet, const uint16_t pseudoId, 
   min = bcdToInt8(packetData[8]);
   deg = bcdToInt8(packetData[9]);
 
+  if ((gpsFlags & GPS_INFO_FLAGS_LONGITUDE_GREATER_99) != 0) {
+    deg = deg + 100;
+  }
+
   // formula from code in gps.cpp
   value = deg * 1000000UL + (min * 100000UL + fmin * 10UL) / 6;
 
@@ -537,6 +551,12 @@ void processSpektrumPacket(const uint8_t *packet)
 
   uint8_t instance = packet[3];
 
+  if (telemetryState == TELEMETRY_INIT) {  // Telemetry Reset?
+    gpsAltHigh = 0;
+    varioTelemetry = false;
+    flightPackTelemetry = false;
+  }
+
   if (i2cAddress == I2C_NODATA) {
     // Not a Sensor.. Telemetry is alive, but no data  (avoid creation of fake 0000,0002.. sensors)
     return; 
@@ -545,6 +565,7 @@ void processSpektrumPacket(const uint8_t *packet)
 #if TEST_CAPTURED_MESSAGE
   // Only for Testing when we don't have the sensor, but have sample data
   i2cAddress = replaceForTestingPackage(packet);
+  instance = packet[3];
 #endif
 
   if (i2cAddress == I2C_FWD_PGM) {
@@ -594,13 +615,13 @@ void processSpektrumPacket(const uint8_t *packet)
   else if (i2cAddress == I2C_FLITECTRL) {
     // AS3X + SAFE information: Flight Mode
     processAS3XPacket(packet);
-    // Continue for backward compatibility with scripts using 05XX sensors
+    return; // not a sensor... this is to cleanup many auto-generated 05XX sensors
   } // I2C_FLITECTRL
 
   else if (i2cAddress == I2C_ALPHA6) {
     // Alpha6 Flight Controller (Blade Helis): Flight Mode
     processAlpha6Packet(packet);
-    // Continue for backward compatibility with scripts using 24XX sensors
+    return; // not a sensor... this is to cleanup many auto-generated 24XX sensors
   } // I2C_ALPHA6
 
   else if (i2cAddress == I2C_SMART_BAT_BASE_ADDRESS) {
@@ -609,13 +630,33 @@ void processSpektrumPacket(const uint8_t *packet)
     i2cAddress = i2cAddress + (packet[4] >> 4);
   } // I2C_SMART_BAT_BASE_ADDRESS
 
+  else if (i2cAddress == I2C_REMOTE_ID) { 
+     if (instance == I2C_GPS_LOC || instance == I2C_GPS_STAT) {
+      // RemoteID/SkyID GPS Data embeded in RemoteID packages
+      // The format is exactly the same (with the exception of the I2C_ID and Instance), 
+      // so we just need to continue processing it as if the frame was a GPS telemetry data.
+      // The instance is populated with 0x16/0x17 when is GPS, and 0x00 when it is the
+      // usual RemoteID data
+      i2cAddress = instance;
+      instance = 0;
+     } else {
+      // Currently we are not processing any other of the RemoteID telemetry frames
+      // we can add in the future a new sensor(s) to record the Remote system ID if we want 
+      // to log it as part of the telemetry data.
+      return; // not a sensor... this is to cleanup many auto-generated 27XX sensors
+     }
+  } // I2C_REMOTE_ID
+
+
   bool handled = false;
   for (const SpektrumSensor * sensor = spektrumSensors; sensor->i2caddress; sensor++) {
-    uint16_t pseudoId = (sensor->i2caddress << 8 | sensor->startByte);
-
-    if (i2cAddress != sensor->i2caddress)  // Not the sensor for current packet
+    // Optimization... the sensor table is sorted incrementally by i2cAddress
+    if (sensor->i2caddress < i2cAddress)  // haven't reach the sesnor def. keep going
       continue;
-  
+    if (sensor->i2caddress > i2cAddress)  // We past it, done
+      break;  
+
+    uint16_t pseudoId = (sensor->i2caddress << 8 | sensor->startByte);  
     handled = true;
 
     // Extract value, skip header
@@ -652,9 +693,14 @@ void processSpektrumPacket(const uint8_t *packet)
     } // I2C_ESC
 
     else if (i2cAddress == I2C_CELLS && sensor->unit == UNIT_VOLTS) {
-      // Map to FrSky style cell values
+      if (value == 0x7FFF) continue;  // ignore NO-DATA
+
+      // Map to FrSky style cell values (All Cells in a single Sensor)
       int cellIndex = (sensor->startByte / 2) << 16;
-      value = value | cellIndex;
+      uint32_t valueCells = cellIndex | value;
+      setTelemetryValue(PROTOCOL_TELEMETRY_SPEKTRUM, I2C_PSEUDO_TX_CELLS, 0, instance, valueCells, UNIT_CELLS, 2);
+      
+      // Continue to process regular Single Cell value
     } // I2C_CELLS
 
     else if (sensor->i2caddress == I2C_HIGH_CURRENT && sensor->unit == UNIT_AMPS) {
@@ -664,20 +710,28 @@ void processSpektrumPacket(const uint8_t *packet)
       value = value * 196791 / 100000;
     } // I2C_HIGH_CURRENT
 
-    // Check if this looks like a LemonRX Transceiver, they use QoS Frame loss A as RSSI indicator(0-100)
-    else if (i2cAddress == I2C_QOS && sensor->startByte == 0) {
-      if (spektrumGetValue(packet + 4, 2, uint16) == 0x8000 &&
-          spektrumGetValue(packet + 4, 4, uint16) == 0x8000 &&
-          spektrumGetValue(packet + 4, 6, uint16) == 0x8000 &&
-          spektrumGetValue(packet + 4, 8, uint16) == 0x8000) {
-        telemetryData.rssi.set(value);
+    else if (i2cAddress == I2C_QOS) {
+      if (sensor->startByte == 0) {  // FdeA
+        // Check if this looks like a LemonRX Transceiver, they use QoS Frame loss A as RSSI indicator(0-100)
+        // farzu: new G2s has different signature, but i think using the Cyrf chip strength is
+        //        more consistent across brands
+        if (spektrumGetValue(packet + 4, 2, uint16) == 0x8000 &&
+            spektrumGetValue(packet + 4, 4, uint16) == 0x8000 &&
+            spektrumGetValue(packet + 4, 6, uint16) == 0x8000 &&
+            spektrumGetValue(packet + 4, 8, uint16) == 0x8000) {
+          telemetryData.rssi.set(value);
+        }
+        else {
+          // Otherwise use the received signal strength of the telemetry packet as indicator
+          // Range is 0-31, multiply by 3 to get an almost full reading for 0x1f, the maximum the cyrf chip reports
+          telemetryData.rssi.set(packet[1] * 3);
+        }
+        telemetryStreaming = TELEMETRY_TIMEOUT10ms; // Telemery Alive
+      } // FdeA
+      else if (sensor->startByte == 8 || sensor->startByte == 10) { // Flss and Hold
+        // Lemon-RX: F and H = 0x7FFF (alternative N0-DATA)
+        if (value == 0x7FFF) continue; 
       }
-      else {
-        // Otherwise use the received signal strength of the telemetry packet as indicator
-        // Range is 0-31, multiply by 3 to get an almost full reading for 0x1f, the maximum the cyrf chip reports
-        telemetryData.rssi.set(packet[1] * 3);
-      }
-      telemetryStreaming = TELEMETRY_TIMEOUT10ms;
     } // I2C_QOS
 
     else if (sensor->i2caddress == I2C_GPS_STAT && sensor->unit == UNIT_DATETIME) {
@@ -717,6 +771,39 @@ void processSpektrumPacket(const uint8_t *packet)
         continue; // setTelemetryValue handled
       }
     } // I2C_GPS_BIN
+
+    else if (i2cAddress == I2C_FP_BATT) {
+      flightPackTelemetry = true;
+      // Lemon-RX G2: No Bat2: Current (-1.0 A)
+      if (sensor->startByte == 6 && ((int16_t) value) == -10) {
+        continue;
+      }  
+    } // I2C_FP_BATT
+
+    else if (i2cAddress == I2C_PBOX) {
+      if (flightPackTelemetry && (sensor->startByte == 4 ||  sensor->startByte == 6)) {
+          // hide mAh Consumption already reported in Fligh Pack message 
+          continue;
+      }
+      else if ((sensor->startByte == 0 || sensor->startByte == 4) && 
+          spektrumGetValue(packet + 4, 0, uint16) == 0) {
+          // No Bat1 Voltage, hide Voltage and Consumption
+          continue;
+      }
+      else if ((sensor->startByte == 2 || sensor->startByte == 6) && 
+          spektrumGetValue(packet + 4, 2, uint16) == 0) {
+          // No Bat2 Voltage, hide Voltage and Consumption
+          continue;
+      }
+    } // I2C_PBOX
+
+    else if (i2cAddress == I2C_VARIO) {
+      varioTelemetry = true;
+    }
+    else if (i2cAddress == I2C_ALTITUDE && varioTelemetry) {
+      // Altitude already reported in vario
+      continue; 
+    }
 
     setTelemetryValue(PROTOCOL_TELEMETRY_SPEKTRUM, pseudoId, 0, instance, value, sensor->unit, sensor->precision);
   } // FOR
@@ -773,8 +860,7 @@ void processDSMBindPacket(uint8_t module, const uint8_t *packet)
     storageDirty(EE_MODEL);
 
     moduleState[module].mode = MODULE_MODE_NORMAL;
-    restartModuleAsync(module, 50); // ~200ms
-    
+    restartModuleAsync(module, 50);  // ~500ms
   }
 #if defined(MULTIMODULE)
   else if (g_model.moduleData[module].type == MODULE_TYPE_MULTIMODULE &&
@@ -882,9 +968,10 @@ void processSpektrumTelemetryData(uint8_t module, uint8_t data,
 
 const SpektrumSensor *getSpektrumSensor(uint16_t pseudoId)
 {
-  uint8_t startByte = (uint8_t) (pseudoId & 0xff);
-  uint8_t i2cadd = (uint8_t) (pseudoId >> 8);
-  for (const SpektrumSensor * sensor = spektrumSensors; sensor->i2caddress; sensor++) {
+  uint8_t startByte = (uint8_t)(pseudoId & 0xff);
+  uint8_t i2cadd = (uint8_t)(pseudoId >> 8);
+  for (const SpektrumSensor *sensor = spektrumSensors; sensor->i2caddress;
+       sensor++) {
     if (i2cadd == sensor->i2caddress && startByte == sensor->startByte) {
       return sensor;
     }
@@ -908,20 +995,32 @@ void spektrumSetDefault(int index, uint16_t id, uint8_t subId, uint8_t instance)
     if (unit == UNIT_RPMS) {
       telemetrySensor.custom.ratio = 1;
       telemetrySensor.custom.offset = 1;
-    }
-    else if (unit == UNIT_FAHRENHEIT) {
+    } else if (unit == UNIT_FAHRENHEIT) {
       if (!IS_IMPERIAL_ENABLE()) {
         telemetrySensor.unit = UNIT_CELSIUS;
       }
-
-    }
-    else if (unit == UNIT_METERS) {
+    } else if (unit == UNIT_CELSIUS) {
+      if (IS_IMPERIAL_ENABLE()) {
+        telemetrySensor.unit = UNIT_FAHRENHEIT;
+      }
+    } else if (unit == UNIT_METERS) {
       if (IS_IMPERIAL_ENABLE()) {
         telemetrySensor.unit = UNIT_FEET;
       }
+    } else if (unit == UNIT_KMH) {
+      if (IS_IMPERIAL_ENABLE()) {
+        telemetrySensor.unit = UNIT_KTS;
+      }
+    } else if (unit == UNIT_METERS_PER_SECOND) {
+      if (IS_IMPERIAL_ENABLE()) {
+        telemetrySensor.unit = UNIT_FEET_PER_SECOND;
+      }
+    } else if (unit == UNIT_KTS) {
+      if (!IS_IMPERIAL_ENABLE()) {
+        telemetrySensor.unit = UNIT_KMH;
+      }
     }
-  }
-  else {
+  } else {
     telemetrySensor.init(id);
   }
 
@@ -1014,58 +1113,98 @@ static int testStep = 0;
 static bool real0x16 = false;
 static bool real0x17 = false;
 static bool real0x34 = false;
+static bool real0x3A = false;
+static bool real0x27 = false;
+
+// *********** GPS LOC (BCD) ******************************
+// Example 0x16:          0  1    2  3  4  5    6  7  8  9    10 11   12   13
+//                16 00 | 97 00 | 54 71 12 28 | 40 80 09 82 | 85 14 | 13 | B9
+//                Alt: 009.7, LAT: 28o 12'7154, LON: -82 09 8040 Course: 148.5, HDOP 1.3 Flags= B9
+//static char test16data[] = {0x16, 0x00, 0x97, 0x00, 0x54, 0x71, 0x12, 0x28,
+//                            0x40, 0x80, 0x09, 0x82, 0x85, 0x14, 0x13, 0xB9};
+
+static char test16data[] = {0x16, 0x00, 0x97, 0x00, 0x54, 0x71, 0x12, 0x28,
+                            0x40, 0x80, 0x09, 0x11, 0x85, 0x14, 0x13, 0xBD}; // > 99 Flag
+
+// *********** GPS STAT (BCD) *****************************
+// Example 0x17:          0  1    2  3  4  5    6    7
+//                17 00 | 25 00 | 00 28 18 21 | 06 | 00    
+//                Spd:002.5k, TimeUTC:21:18:28.00, Sats: 06, AltH=00
+static char test17data[] = {0x17, 0x00, 0x25, 0x00, 0x00,
+                            0x28, 0x18, 0x21, 0x06, 0x00};
+
+// *********** Dual Flight pack monitor (Little-Endian)***************
+// Example 0x34:          0  1    2  3    4  5    6  7    8  9    10 11 
+//                34 00 | 2F 00 | 30 09 | 85 01 | 2B 00 | 07 0A | 81 01 
+//                B1: 004.7A, 2352mAh, 38.9C   B2: 004.3A, 2567mAh, 38.5C  
+static char test34data[] = {0x34, 0x00, 0x2F, 0x00, 0x30, 0x09, 0x85, 0x01, 
+                                        0x2B, 0x00, 0x07, 0x0A, 0x81, 0x01 };
+
+// *********** Lipo monitor (Big-Endian)***************
+// Example 0x3A:          0  1    2  3    4  5    6  7    8  9    10 11   12 13
+//                3A 00 | 01 9A | 01 9B | 01 9C | 01 9D | 7F FF | 7F FF | 0F AC 
+//                         4.10V   4.11V   4.12V   4.12v   --      --     40.1C
+static char test3Adata[] = {0x3A, 0x00, 0x01, 0x9A, 0x01, 0x9B, 0x01, 0x9C, 
+                                        0x01, 0x9D, 0x7F, 0xFF, 0x7F, 0xFF,
+                                        0x01, 0x91 };
+
+
+// RemoteID (0x27), embeds Gps data in its frames, but by puting the real I2C frame
+// address as the instance, everything else is the same
+static char test27data_16[] = {0x27, 0x16, 0x97, 0x00, 0x54, 0x71, 0x12, 0x28,
+                            0x40, 0x80, 0x09, 0x11, 0x85, 0x14, 0x13, 0xBD}; // > 99 Flag
+static char test27data_17[] = {0x27, 0x17, 0x25, 0x00, 0x00,
+                            0x28, 0x18, 0x21, 0x06, 0x00};
 
 static uint8_t replaceForTestingPackage(const uint8_t *packet)
 {
   uint8_t i2cAddress = packet[2] & 0x7f;
 
   // If we received a real package for the ones that we can Fake it, disable replacement
-  if (i2cAddress != I2C_GPS_LOC) real0x16 = true;
-  else if (i2cAddress != I2C_GPS_STAT) real0x17 = true;
-  else if (i2cAddress != I2C_FP_BATT) real0x34 = true;
+  if (i2cAddress == I2C_GPS_LOC) real0x16 = true;
+  else if (i2cAddress == I2C_GPS_STAT) real0x17 = true;
+  else if (i2cAddress == I2C_FP_BATT) real0x34 = true;
+  else if (i2cAddress == I2C_CELLS) real0x3A = true;
+  else if (i2cAddress == I2C_REMOTE_ID) real0x27 = true;
   
   // Only Substiture AS3X/SAFE I2C_FLITECTRL packages, since they are constantly brodcast
   if (i2cAddress != I2C_FLITECTRL) {  
     return i2cAddress;
   }
 
-  // *********** GPS LOC (BCD) ******************************
-  // Example 0x16:          0  1    2  3  4  5    6  7  8  9    10 11   12   13
-  //                16 00 | 97 00 | 54 71 12 28 | 40 80 09 82 | 85 14 | 13 | B9
-  //                Alt: 009.7, LAT: 28o 12'7154, LON: -82 09 8040 Course: 148.5, HDOP 1.3 Flags= B9
-  const char test16data[] = {0x16, 0x00, 0x97, 0x00, 0x54, 0x71, 0x12, 0x28,
-                             0x40, 0x80, 0x09, 0x82, 0x85, 0x14, 0x13, 0xB9};
-
-  // *********** GPS STAT (BCD) *****************************
-  // Example 0x17:          0  1    2  3  4  5    6    7
-  //                17 00 | 25 00 | 00 28 18 21 | 06 | 00    
-  //                Spd:002.5k, TimeUTC:21:18:28.00, Sats: 06, AltH=00
-  const char test17data[] = {0x17, 0x00, 0x25, 0x00, 0x00,
-                             0x28, 0x18, 0x21, 0x06, 0x00};
-
-  // *********** Dual Flight pack monitor (Little-Endian)***************
-  // Example 0x34:          0  1    2  3    4  5    6  7    8  9    10 11 
-  //                34 00 | 2F 00 | 30 09 | 85 01 | 2B 00 | 07 0A | 81 01 
-  //                B1: 004.7A, 2352mAh, 38.9C   B2: 004.3A, 2567mAh, 38.5C  
-  const char test34data[] = {0x34, 0x00, 0x2F, 0x00, 0x30, 0x09, 0x85, 0x01, 
-                                         0x2B, 0x00, 0x07, 0x0A, 0x81, 0x01 };
-
   switch (testStep) {
     case 0:
         // return original packet
         break;
     case 1: // return GSP LOG
-        if (!real0x16) memcpy((char *)packet + 2, test16data, 16);
+        if (!real0x27) {
+          test27data_16[4]=test27data_16[4]+1;
+          test27data_16[8]=test27data_16[8]+1;
+          memcpy((char *)packet + 2, test27data_16, 16);
+          real0x16=true; // disable test of regular GPS frames, and use the RemoteID
+        }
+        if (!real0x16) {
+          test16data[4]=test16data[4]+1;
+          test16data[8]=test16data[8]+1;
+          memcpy((char *)packet + 2, test16data, 16);
+        }
         break;
     case 2: // Return GPS STAT
+        if (!real0x27) {
+          memcpy((char *)packet + 2, test27data_17, 10);
+          real0x17=true; // disable test of regular GPS frames, and use the RemoteID
+        }
         if (!real0x17) memcpy((char *)packet + 2, test17data, 10);
         break;
     case 3: // Return Dual Bat monitor
         if (!real0x34) memcpy((char *)packet + 2, test34data, 14);
         break;
+    case 4: // Return LIPO monitor
+        if (!real0x3A) memcpy((char *)packet + 2, test3Adata, 16);
+        break;
   }
 
-  testStep = (testStep + 1) % 4;
+  testStep = (testStep + 1) % 5;
   
 
   return packet[2] & 0x7f;

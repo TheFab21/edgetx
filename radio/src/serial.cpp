@@ -28,6 +28,7 @@
 #include <string.h>
 
 #include "hal/serial_port.h"
+#include "hal/usb_driver.h"
 
 #if defined(CONFIGURABLE_MODULE_PORT) and !defined(BOOT)
   #include "hal/module_port.h"
@@ -35,7 +36,7 @@
 #endif
 
 #if !defined(BOOT)
-  #include "opentx.h"
+  #include "edgetx.h"
   #include "lua/lua_api.h"
 #else
   #include "dataconstants.h"
@@ -83,17 +84,14 @@ extern "C" void dbgSerialPrintf(const char * format, ...)
   va_list arglist;
   char tmp[PRINTF_BUFFER_SIZE+1];
 
-  // no need to do anything if we don't have an output
-  if (!dbg_serial_putc) return;
-
   va_start(arglist, format);
   vsnprintf(tmp, PRINTF_BUFFER_SIZE, format, arglist);
   tmp[PRINTF_BUFFER_SIZE] = '\0';
   va_end(arglist);
 
   const char *t = tmp;
-  while (*t && dbg_serial_putc) {
-    SEGGER_RTT_Write(0, (const void *)t++, 1);
+  while (*t) {
+    SEGGER_RTT_Write(0, (const void*)t++, 1);
   }
 }
 #else
@@ -219,12 +217,10 @@ static void serialSetCallBacks(int mode, void* ctx, const etx_serial_port_t* por
     break;
 #endif
 
-#if defined(SBUS_TRAINER)
   case UART_MODE_SBUS_TRAINER:
     sbusSetAuxGetByte(ctx, getByte);
     // TODO: setRxCb (see MODE_LUA)
     break;
-#endif
 
   case UART_MODE_TELEMETRY:
     // telemetrySetGetByte(ctx, getByte);
@@ -246,7 +242,7 @@ static void serialSetCallBacks(int mode, void* ctx, const etx_serial_port_t* por
 
 #if defined(INTERNAL_GPS)
   case UART_MODE_GPS:
-    gpsSetSerialDriver(ctx, drv);
+    gpsSetSerialDriver(ctx, drv, GPS_PROTOCOL_AUTO);
     break;
 #endif
 
@@ -297,7 +293,7 @@ static void serialSetupPort(int mode, etx_serial_init& params)
   case UART_MODE_TELEMETRY_MIRROR:
     // TODO: query telemetry baudrate / add setting for module
 #if defined(CROSSFIRE)
-    if (modelTelemetryProtocol() == PROTOCOL_TELEMETRY_CROSSFIRE) {
+    if (isModuleCrossfire(EXTERNAL_MODULE) || isModuleCrossfire(INTERNAL_MODULE)) {
       params.baudrate = CROSSFIRE_TELEM_MIRROR_BAUDRATE;
       break;
     }
@@ -306,7 +302,8 @@ static void serialSetupPort(int mode, etx_serial_init& params)
     break;
 
   case UART_MODE_TELEMETRY:
-    if (modelTelemetryProtocol() == PROTOCOL_TELEMETRY_FRSKY_D_SECONDARY) {
+    if (isModulePPM(EXTERNAL_MODULE) &&
+        g_model.telemetryProtocol == PROTOCOL_TELEMETRY_FRSKY_D_SECONDARY) {
       params.baudrate = FRSKY_D_BAUDRATE;
       params.direction = ETX_Dir_RX;
     }
@@ -380,6 +377,38 @@ void serialSetPower(uint8_t port_nr, bool enabled)
 }
 #endif
 
+uint32_t serialGetBaudrate(uint8_t port_nr)
+{
+  auto state = getSerialPortState(port_nr);
+  if (!state || !state->port || !state->usart_ctx)
+    return 0;
+
+  auto port = state->port;
+  if (!port->uart || !port->uart->getBaudrate) return 0;
+
+  return port->uart->getBaudrate(state->usart_ctx);
+}
+
+void serialSetBaudrate(uint8_t port_nr, uint32_t baudrate)
+{
+  auto state = getSerialPortState(port_nr);
+  if (!state || !state->port || !state->usart_ctx)
+    return;
+
+  auto port = state->port;
+  if (!port->uart || !port->uart->setBaudrate) return;
+
+  port->uart->setBaudrate(state->usart_ctx, baudrate);
+}
+
+int serialGetModePort(int mode)
+{
+  for (int p = 0; p < MAX_SERIAL_PORTS; p++) {
+    if (serialGetMode(p) == mode) return p;
+  }
+  return -1;  
+}
+
 void serialInit(uint8_t port_nr, int mode)
 {
   auto state = getSerialPortState(port_nr);
@@ -426,8 +455,13 @@ void serialInit(uint8_t port_nr, int mode)
 
   serialSetupPort(mode, params);
 
-  if (mode == UART_MODE_NONE ||
-      !port || params.baudrate == 0 ||
+  if (mode == UART_MODE_NONE ) {
+    // Even if port has no mode, port power needs to be set
+    serialSetPowerState(port_nr);
+    return;
+  }
+
+  if (!port || params.baudrate == 0 ||
       !port->uart || !port->uart->init)
     return;
   
@@ -452,12 +486,20 @@ void serialInit(uint8_t port_nr, int mode)
 
 void initSerialPorts()
 {
-  memset(serialPortStates, 0, sizeof(serialPortStates));
-
+#if defined(DEBUG)
+  // AUX1 and serialPortStates was already initialized early in DEBUG config
+  for (uint8_t port_nr = 0; port_nr < MAX_AUX_SERIAL; port_nr++) {
+    if (port_nr != SP_AUX1) {
+      auto mode = getSerialPortMode(port_nr);
+      serialInit(port_nr, mode);
+    }
+  }
+#else
   for (uint8_t port_nr = 0; port_nr < MAX_AUX_SERIAL; port_nr++) {
     auto mode = getSerialPortMode(port_nr);
     serialInit(port_nr, mode);
   }
+#endif
 }
 
 int serialGetMode(uint8_t port_nr)

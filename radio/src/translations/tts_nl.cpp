@@ -21,7 +21,7 @@
 
 // NOTE: This file is identical to the EN version
 
-#include "opentx.h"
+#include "edgetx.h"
 
 enum DutchPrompts {
   NL_PROMPT_NUMBERS_BASE = 0,
@@ -36,7 +36,7 @@ enum DutchPrompts {
 };
 
 
-  #define NL_PUSH_UNIT_PROMPT(u, p) nl_pushUnitPrompt((u), (p), id)
+#define NL_PUSH_UNIT_PROMPT(u, p) nl_pushUnitPrompt((u), (p), id, fragmentVolume)
 
 I18N_PLAY_FUNCTION(nl, pushUnitPrompt, uint8_t unitprompt, int16_t number)
 {

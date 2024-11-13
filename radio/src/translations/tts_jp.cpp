@@ -19,7 +19,7 @@
  * GNU General Public License for more details.
  */
 
-#include "opentx.h"
+#include "edgetx.h"
 
 enum JapanesePrompts {
   JP_PROMPT_NUMBERS_BASE = 0,
@@ -34,7 +34,7 @@ enum JapanesePrompts {
 };
 
 
-  #define JP_PUSH_UNIT_PROMPT(u, p) jp_pushUnitPrompt((u), (p), id)
+#define JP_PUSH_UNIT_PROMPT(u, p) jp_pushUnitPrompt((u), (p), id, fragmentVolume)
 
 I18N_PLAY_FUNCTION(jp, pushUnitPrompt, uint8_t unitprompt, int16_t number)
 {

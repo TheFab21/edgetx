@@ -1,7 +1,8 @@
 /*
- * Copyright (C) OpenTX
+ * Copyright (C) EdgeTX
  *
  * Based on code named
+ *   opentx - https://github.com/opentx/opentx
  *   th9x - http://code.google.com/p/th9x
  *   er9x - http://code.google.com/p/er9x
  *   gruvin9x - http://code.google.com/p/gruvin9x
@@ -213,7 +214,7 @@ QString FirmwareInterface::seekString(const QString & string)
 {
   QString result = "";
 
-  int start = flash.indexOf(string);
+  int start = flash.indexOf(string.toUtf8());
   if (start > 0) {
     start += string.length();
     int end = -1;

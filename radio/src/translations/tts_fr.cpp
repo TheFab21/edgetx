@@ -19,7 +19,7 @@
  * GNU General Public License for more details.
  */
 
-#include "opentx.h"
+#include "edgetx.h"
 
 enum FrenchPrompts {
   FR_PROMPT_NUMBERS_BASE = 0,
@@ -52,7 +52,7 @@ enum FrenchPrompts {
 };
 
 
-  #define FR_PUSH_UNIT_PROMPT(u) fr_pushUnitPrompt((u), id)
+#define FR_PUSH_UNIT_PROMPT(u) fr_pushUnitPrompt((u), id, fragmentVolume)
 
 I18N_PLAY_FUNCTION(fr, pushUnitPrompt, uint8_t unitprompt)
 {

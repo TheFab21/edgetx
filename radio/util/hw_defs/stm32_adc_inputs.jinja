@@ -6,6 +6,7 @@
 static const stm32_adc_input_t _ADC_inputs[] = {
 {% for input in adc_inputs.inputs %}
   {
+    // {{ input.name }}
     // ADC_INPUT_{{ input.type }},
     {{ input.gpio if input.gpio else 'nullptr' }},
     {{ input.pin if input.gpio else '0' }},
@@ -49,11 +50,13 @@ static const stm32_spi_adc_t _ADC_spi[] = {
   {% set inputs = adc_inputs.inputs | selectattr('adc', '==', adc.name) | selectattr('channel','defined') %}
   {% set input_count = inputs | list | count %}
   {
-    {{ adc.adc }},
-    {{ adc.gpio }},
-    {{ adc.gpio_pin_miso }} | {{ adc.gpio_pin_mosi }} | {{ adc.gpio_pin_sck }},
-    {{ adc.gpio_af }},
-    {{ adc.gpio_pin_cs }},
+    .spi = {
+      {{ adc.adc }},
+      {{ adc.gpio }},
+      {{ adc.gpio_pin_miso }} | {{ adc.gpio_pin_mosi }} | {{ adc.gpio_pin_sck }},
+      {{ adc.gpio }},
+      {{ adc.gpio_pin_cs }},
+    },
     _ADC_{{ adc.name }}_channels,
     {{ input_count }}
   },
@@ -75,6 +78,15 @@ extern "C" void ADC_IRQHandler()
   stm32_hal_adc_isr(&_ADC_adc[{{ loop.index0 }}]);
 {% endfor %} 
 }
+
+#if defined(STM32H7)
+extern "C" void ADC3_IRQHandler()
+{
+{% for adc in adc_inputs.adcs | selectattr('name', '!=', 'SPI') %}
+  stm32_hal_adc_isr(&_ADC_adc[{{ loop.index0 }}]);
+{% endfor %} 
+}
+#endif
 
 {% for adc_gpio, adc_inputs in adc_gpios.items() | sort %}
 static const uint32_t _ADC_{{ adc_gpio }}_pins[] = {

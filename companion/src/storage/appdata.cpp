@@ -1,7 +1,8 @@
 /*
- * Copyright (C) OpenTX
+ * Copyright (C) EdgeTX
  *
  * Based on code named
+ *   opentx - https://github.com/opentx/opentx
  *   th9x - http://code.google.com/p/th9x
  *   er9x - http://code.google.com/p/er9x
  *   gruvin9x - http://code.google.com/p/gruvin9x
@@ -302,6 +303,11 @@ bool NamedJSData::existsOnDisk()
 Profile::Profile() : CompStoreObj(), index(-1)
 {
   CompStoreObj::addObjectMapping(propertyGroup(), this);
+}
+
+Profile::Profile(const Profile & rhs) : CompStoreObj(), index(-1)
+{
+  *this = rhs;
 }
 
 // The default copy operator can not be used since the index variable would be destroyed
@@ -659,6 +665,18 @@ QMap<int, QString> AppData::getActiveProfiles() const
       active.insert(i, g.profile[i].name());
   }
   return active;
+}
+
+void AppData::moveCurrentProfileToTop()
+{
+  if (g.sortProfiles() && m_sessionId > 0) {
+    Profile tmpProfile(g.profile[m_sessionId]);
+    for (int i = m_sessionId; i > 0; i -= 1) {
+      g.profile[i] = g.profile[i - 1];
+    }
+    g.profile[0] = tmpProfile;
+    id(0);
+  }
 }
 
 void AppData::convertSettings(QSettings & settings)

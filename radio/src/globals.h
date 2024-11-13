@@ -19,20 +19,18 @@
  * GNU General Public License for more details.
  */
 
-#ifndef _GLOBALS_H_
-#define _GLOBALS_H_
+#pragma once
 
 #include "definitions.h"
 #include "dataconstants.h"
-#include "opentx_types.h"
+#include "edgetx_types.h"
 
 PACK(struct GlobalData {
-  uint8_t unexpectedShutdown:1;
   uint8_t externalAntennaEnabled:1;
   uint8_t authenticationCount:2;
   uint8_t upgradeModulePopup:1;
   uint8_t internalModuleVersionChecked:1;
-  uint8_t spare:2;
+  uint8_t spare:3;
 });
 
 extern GlobalData globalData;
@@ -49,9 +47,12 @@ extern safetych_t safetyCh[MAX_OUTPUT_CHANNELS];
 extern uint8_t trimsCheckTimer;
 extern uint8_t trimsDisplayTimer;
 extern uint8_t trimsDisplayMask;
-extern uint16_t maxMixerDuration;
+extern uint32_t maxMixerDuration;
 
+#if defined(AUDIO)
 extern uint8_t requiredSpeakerVolume;
+#endif
+
 extern uint8_t requiredBacklightBright;
 
 enum MainRequest {
@@ -62,9 +63,7 @@ enum MainRequest {
 
 extern uint8_t mainRequestFlags;
 
-#define DELAY_POS_MARGIN   3
-
-PACK(struct SwOn {
+PACK(struct MixState {
   uint16_t delay:14; // max = 2550
   uint8_t  activeMix:1;
   uint8_t  activeExpo:1;
@@ -72,7 +71,7 @@ PACK(struct SwOn {
   int16_t  prev;
 });
 
-extern SwOn   swOn[MAX_MIXERS];
+extern MixState mixState[MAX_MIXERS];
 extern int32_t act[MAX_MIXERS];
 
 // static variables used in evalFlightModeMixes - moved here so they don't interfere with the stack
@@ -97,5 +96,3 @@ extern uint8_t beepAgain;
 extern uint16_t lightOffCounter;
 extern uint8_t flashCounter;
 extern uint8_t mixWarning;
-
-#endif

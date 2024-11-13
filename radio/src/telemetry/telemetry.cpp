@@ -19,7 +19,7 @@
  * GNU General Public License for more details.
  */
 
-#include "opentx.h"
+#include "edgetx.h"
 #include "multi.h"
 #include "pulses/afhds3.h"
 #include "pulses/flysky.h"
@@ -60,39 +60,27 @@
   #include "flysky_ibus.h"
 #endif
 
-uint8_t telemetryStreaming = 0;
-uint8_t telemetryRxBuffer[TELEMETRY_RX_PACKET_SIZE];
-uint8_t telemetryRxBufferCount = 0;
+struct telemetry_buffer {
+  uint8_t buffer[TELEMETRY_RX_PACKET_SIZE];
+  uint8_t length;
+};
 
+uint8_t telemetryStreaming = 0;
 uint8_t telemetryState = TELEMETRY_INIT;
 
 TelemetryData telemetryData;
-
-uint8_t telemetryProtocol = 255;
-
-#if defined(INTERNAL_MODULE_SERIAL_TELEMETRY)
-static uint8_t intTelemetryRxBuffer[TELEMETRY_RX_PACKET_SIZE];
-static uint8_t intTelemetryRxBufferCount;
-#endif
-
 static rxStatStruct rxStat;
 
-uint8_t * getTelemetryRxBuffer(uint8_t moduleIdx)
+telemetry_buffer _telemetry_rx_buffer[NUM_MODULES];
+
+uint8_t* getTelemetryRxBuffer(uint8_t moduleIdx)
 {
-#if defined(INTERNAL_MODULE_SERIAL_TELEMETRY)
-  if (moduleIdx == INTERNAL_MODULE)
-    return intTelemetryRxBuffer;
-#endif
-  return telemetryRxBuffer;
+  return _telemetry_rx_buffer[moduleIdx].buffer;
 }
 
 uint8_t &getTelemetryRxBufferCount(uint8_t moduleIdx)
 {
-#if defined(INTERNAL_MODULE_SERIAL_TELEMETRY)
-  if (moduleIdx == INTERNAL_MODULE)
-    return intTelemetryRxBufferCount;
-#endif
-  return telemetryRxBufferCount;
+  return _telemetry_rx_buffer[moduleIdx].length;
 }
 
 rxStatStruct *getRxStatLabels() {
@@ -112,75 +100,53 @@ rxStatStruct *getRxStatLabels() {
 
   uint8_t moduleType = g_model.moduleData[moduleToUse].type;
 
-  switch(moduleType) {
+  switch (moduleType) {
 #if defined(MULTIMODULE)
     case MODULE_TYPE_MULTIMODULE: {
-        uint8_t multiProtocol = g_model.moduleData[moduleToUse].multi.rfProtocol;
+      uint8_t multiProtocol = g_model.moduleData[moduleToUse].multi.rfProtocol;
 
-        if (multiProtocol == MODULE_SUBTYPE_MULTI_FS_AFHDS2A ||
-            multiProtocol == MODULE_SUBTYPE_MULTI_HOTT ||
-            multiProtocol == MODULE_SUBTYPE_MULTI_MLINK) {
-          rxStat.label = STR_RXSTAT_LABEL_RQLY;
-          rxStat.unit  = STR_RXSTAT_UNIT_PERCENT;
-        }
+      if (multiProtocol == MODULE_SUBTYPE_MULTI_FS_AFHDS2A ||
+          multiProtocol == MODULE_SUBTYPE_MULTI_HOTT ||
+          multiProtocol == MODULE_SUBTYPE_MULTI_MLINK) {
+        rxStat.label = STR_RXSTAT_LABEL_RQLY;
+        rxStat.unit = STR_RXSTAT_UNIT_PERCENT;
       }
-      break;
+    } break;
 #endif
     case MODULE_TYPE_PPM:
-      if(moduleState[moduleToUse].protocol == PROTOCOL_CHANNELS_PPM_MLINK) {
+      if (g_model.moduleData[moduleToUse].subType == PPM_PROTO_TLM_MLINK) {
         rxStat.label = STR_RXSTAT_LABEL_RQLY;
-        rxStat.unit  = STR_RXSTAT_UNIT_PERCENT;
+        rxStat.unit = STR_RXSTAT_UNIT_PERCENT;
       }
       break;
 
     case MODULE_TYPE_CROSSFIRE:
     case MODULE_TYPE_GHOST:
       rxStat.label = STR_RXSTAT_LABEL_RQLY;
-      rxStat.unit  = STR_RXSTAT_UNIT_PERCENT;
+      rxStat.unit = STR_RXSTAT_UNIT_PERCENT;
       break;
 
-    case MODULE_TYPE_FLYSKY:
-      #if defined (PCBNV14)
-        extern uint32_t NV14internalModuleFwVersion;
+#if defined(PCBNV14) && defined(AFHDS2)
+    case MODULE_TYPE_FLYSKY_AFHDS2A:
+      extern uint32_t NV14internalModuleFwVersion;
 
-        if(moduleToUse == INTERNAL_MODULE) {
-          if(g_model.moduleData[INTERNAL_MODULE].subType == FLYSKY_SUBTYPE_AFHDS2A && 
-             NV14internalModuleFwVersion >= 0x1000E) {
-            rxStat.label = STR_RXSTAT_LABEL_SIGNAL;
-            rxStat.unit  = STR_RXSTAT_UNIT_NOUNIT ;
-          }
+      if (moduleToUse == INTERNAL_MODULE) {
+        if (NV14internalModuleFwVersion >= 0x1000E) {
+          rxStat.label = STR_RXSTAT_LABEL_SIGNAL;
+          rxStat.unit = STR_RXSTAT_UNIT_NOUNIT;
         }
-      #endif      
+      }
       break;
+#endif
   }
 
   return &rxStat;
 }
 
-// TODO: move to module port driver
-//
-// static int (*_telemetryGetByte)(void*, uint8_t*) = nullptr;
-// static void* _telemetryGetByteCtx = nullptr;
-
-// void telemetrySetGetByte(void* ctx, int (*fct)(void*, uint8_t*))
-// {
-//   _telemetryGetByte = nullptr;
-//   _telemetryGetByteCtx = ctx;
-//   _telemetryGetByte = fct;
-// }
-
-// static bool telemetryGetByte(uint8_t* data)
-// {
-//   auto _getByte = _telemetryGetByte;
-//   auto _ctx = _telemetryGetByteCtx;
-
-//   if (_getByte) {
-//     return _getByte(_ctx, data);
-//   }
-
-//   // return sportGetByte(data);
-//   return false;
-// }
+// This can only be changed when the mixer is not
+// running as the priority of the timer task is
+// lower.
+volatile uint8_t _telemetryIsPolling = false;
 
 static void (*telemetryMirrorSendByte)(void*, uint8_t) = nullptr;
 static void* telemetryMirrorSendByteCtx = nullptr;
@@ -238,6 +204,51 @@ void telemetryStop()
     }
   }
 }
+
+static void _poll_frame(void *pvParameter1, uint32_t ulParameter2)
+{
+  _telemetryIsPolling = true;
+
+  auto drv = (const etx_proto_driver_t*)pvParameter1;
+  auto module = (uint8_t)ulParameter2;
+
+  auto mod = pulsesGetModuleDriver(module);
+  if (!mod || !mod->drv || !mod->ctx || (drv != mod->drv))
+    return;
+
+  auto ctx = mod->ctx;
+  auto mod_st = (etx_module_state_t*)ctx;
+  auto serial_drv = modulePortGetSerialDrv(mod_st->rx);
+  auto serial_ctx = modulePortGetCtx(mod_st->rx);
+
+  if (!serial_drv || !serial_ctx || !serial_drv->copyRxBuffer)
+    return;
+
+  uint8_t frame[TELEMETRY_RX_PACKET_SIZE];
+
+  int frame_len = serial_drv->copyRxBuffer(serial_ctx, frame, TELEMETRY_RX_PACKET_SIZE);
+  if (frame_len > 0) {
+
+    LOG_TELEMETRY_WRITE_START();
+    for (int i = 0; i < frame_len; i++) {
+      telemetryMirrorSend(frame[i]);
+      LOG_TELEMETRY_WRITE_BYTE(frame[i]);
+    }
+
+    uint8_t* rxBuffer = getTelemetryRxBuffer(module);
+    uint8_t& rxBufferCount = getTelemetryRxBufferCount(module);
+    drv->processFrame(ctx, frame, frame_len, rxBuffer, &rxBufferCount);
+  }
+
+  _telemetryIsPolling = false;
+}
+
+void telemetryFrameTrigger_ISR(uint8_t module, const etx_proto_driver_t* drv)
+{
+  BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+  xTimerPendFunctionCallFromISR(_poll_frame, (void*)drv, module, &xHigherPriorityTaskWoken);
+  portYIELD_FROM_ISR( xHigherPriorityTaskWoken );
+}
 #endif
 
 inline bool isBadAntennaDetected()
@@ -281,11 +292,6 @@ static inline void pollTelemetry(uint8_t module, const etx_proto_driver_t* drv, 
   }
 }
 
-// This can only be changed when the mixer is not
-// running as the priority of the timer task is
-// lower.
-volatile uint8_t _telemetryIsPolling = false;
-
 void telemetryWakeup()
 {
   _telemetryIsPolling = true;
@@ -296,8 +302,8 @@ void telemetryWakeup()
   }
   _telemetryIsPolling = false;
 
-  for (int i=0; i<MAX_TELEMETRY_SENSORS; i++) {
-    const TelemetrySensor & sensor = g_model.telemetrySensors[i];
+  for (int i = 0; i < MAX_TELEMETRY_SENSORS; i++) {
+    const TelemetrySensor& sensor = g_model.telemetrySensors[i];
     if (sensor.type == TELEM_TYPE_CALCULATED) {
       telemetryItems[i].eval(sensor);
     }
@@ -310,17 +316,17 @@ void telemetryWakeup()
 #endif
 
   static tmr10ms_t alarmsCheckTime = 0;
-  #define SCHEDULE_NEXT_ALARMS_CHECK(seconds) alarmsCheckTime = get_tmr10ms() + (100*(seconds))
+#define SCHEDULE_NEXT_ALARMS_CHECK(seconds) \
+  alarmsCheckTime = get_tmr10ms() + (100 * (seconds))
   if (int32_t(get_tmr10ms() - alarmsCheckTime) > 0) {
-
-    SCHEDULE_NEXT_ALARMS_CHECK(1/*second*/);
+    SCHEDULE_NEXT_ALARMS_CHECK(1 /*second*/);
 
     bool sensorLost = false;
-    for (int i=0; i<MAX_TELEMETRY_SENSORS; i++) {
+    for (int i = 0; i < MAX_TELEMETRY_SENSORS; i++) {
       if (isTelemetryFieldAvailable(i)) {
-        TelemetryItem & item = telemetryItems[i];
+        TelemetryItem& item = telemetryItems[i];
         if (item.timeout == 0) {
-          TelemetrySensor * sensor = & g_model.telemetrySensors[i];
+          TelemetrySensor* sensor = &g_model.telemetrySensors[i];
           if (sensor->unit != UNIT_DATETIME) {
             item.setOld();
             sensorLost = true;
@@ -329,7 +335,8 @@ void telemetryWakeup()
       }
     }
 
-    if (sensorLost && TELEMETRY_STREAMING() && !g_model.disableTelemetryWarning) {
+    if (sensorLost && TELEMETRY_STREAMING() &&
+        !g_model.disableTelemetryWarning) {
       audioEvent(AU_SENSOR_LOST);
     }
 
@@ -337,24 +344,25 @@ void telemetryWakeup()
     if (isBadAntennaDetected()) {
       AUDIO_RAS_RED();
       POPUP_WARNING_ON_UI_TASK(STR_WARNING, STR_ANTENNAPROBLEM);
-      SCHEDULE_NEXT_ALARMS_CHECK(10/*seconds*/);
+      SCHEDULE_NEXT_ALARMS_CHECK(10 /*seconds*/);
     }
 #endif
 
     if (!g_model.disableTelemetryWarning) {
       if (TELEMETRY_STREAMING()) {
-        if (TELEMETRY_RSSI() < g_model.rfAlarms.critical ) {
+        if (TELEMETRY_RSSI() < g_model.rfAlarms.critical) {
           AUDIO_RSSI_RED();
-          SCHEDULE_NEXT_ALARMS_CHECK(10/*seconds*/);
-        }
-        else if (TELEMETRY_RSSI() < g_model.rfAlarms.warning ) {
+          SCHEDULE_NEXT_ALARMS_CHECK(10 /*seconds*/);
+        } else if (TELEMETRY_RSSI() < g_model.rfAlarms.warning) {
           AUDIO_RSSI_ORANGE();
-          SCHEDULE_NEXT_ALARMS_CHECK(10/*seconds*/);
+          SCHEDULE_NEXT_ALARMS_CHECK(10 /*seconds*/);
         }
       }
 
       if (TELEMETRY_STREAMING()) {
-        if (telemetryState == TELEMETRY_KO) {
+        if (telemetryState == TELEMETRY_INIT) {
+          AUDIO_TELEMETRY_CONNECTED();
+        } else if (telemetryState == TELEMETRY_KO) {
           AUDIO_TELEMETRY_BACK();
 
 #if defined(CROSSFIRE)
@@ -373,8 +381,7 @@ void telemetryWakeup()
 #endif
         }
         telemetryState = TELEMETRY_OK;
-      }
-      else if (telemetryState == TELEMETRY_OK) {
+      } else if (telemetryState == TELEMETRY_OK) {
         telemetryState = TELEMETRY_KO;
         if (!isModuleInBeepMode()) {
           AUDIO_TELEMETRY_LOST();
@@ -420,58 +427,7 @@ void telemetryReset()
   }
 
   telemetryStreaming = 0; // reset counter only if valid telemetry packets are being detected
-
   telemetryState = TELEMETRY_INIT;
-}
-
-// we don't reset the telemetry here as we would also reset the consumption after model load
-void telemetryInit(uint8_t protocol)
-{
-  telemetryProtocol = protocol;
-
-//   if (protocol == PROTOCOL_TELEMETRY_FRSKY_D) {
-//     telemetryPortInit(FRSKY_D_BAUDRATE, TELEMETRY_SERIAL_DEFAULT);
-//   }
-// #if defined(MULTIMODULE)
-//   else if (protocol == PROTOCOL_TELEMETRY_MULTIMODULE) {
-//     // The DIY Multi module always speaks 100000 baud regardless of the
-//     // telemetry protocol in use
-//     telemetryPortInit(MULTIMODULE_BAUDRATE, TELEMETRY_SERIAL_8E2);
-// #if defined(LUA)
-//     outputTelemetryBuffer.reset();
-// #endif
-//     telemetryPortSetDirectionInput();
-//   } else if (protocol == PROTOCOL_TELEMETRY_SPEKTRUM) {
-//     // Spektrum's own small race RX (SPM4648) uses 125000 8N1, use the same
-//     // since there is no real standard
-//     telemetryPortInit(125000, TELEMETRY_SERIAL_DEFAULT);
-//   }
-// #endif
-
-// #if defined(GHOST)
-//   else if (protocol == PROTOCOL_TELEMETRY_GHOST) {
-//     telemetryPortInit(GHOST_BAUDRATE, TELEMETRY_SERIAL_DEFAULT);
-// #if defined(LUA)
-//     outputTelemetryBuffer.reset();
-// #endif
-//     telemetryPortSetDirectionOutput();
-//   }
-// #endif
-
-// #if defined(AUX_SERIAL)
-//   else if (protocol == PROTOCOL_TELEMETRY_FRSKY_D_SECONDARY) {
-//     telemetryPortInit(0, TELEMETRY_SERIAL_DEFAULT);
-//   }
-// #endif
-//   else if (protocol == PROTOCOL_TELEMETRY_DSMP) {
-//     // soft serial
-//     telemetryPortInvertedInit(115200);
-//   } else {
-//     telemetryPortInit(FRSKY_SPORT_BAUDRATE, TELEMETRY_SERIAL_WITHOUT_DMA);
-// #if defined(LUA)
-//     outputTelemetryBuffer.reset();
-// #endif
-//   }
 }
 
 #if defined(LOG_TELEMETRY) && !defined(SIMU)

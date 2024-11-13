@@ -1,7 +1,8 @@
 /*
- * Copyright (C) OpenTX
+ * Copyright (C) EdgeTX
  *
  * Based on code named
+ *   opentx - https://github.com/opentx/opentx
  *   th9x - http://code.google.com/p/th9x
  *   er9x - http://code.google.com/p/er9x
  *   gruvin9x - http://code.google.com/p/gruvin9x
@@ -171,9 +172,12 @@ QVariant ModelsListModel::data(const QModelIndex & index, int role) const
     return item->data(index.column());
   }
 
-  if (role == Qt::FontRole && item->isModel() && item->getModelIndex() == (int)radioData->generalSettings.currModelIndex) {
+  if (role == Qt::FontRole && item->isModel()) {
     QFont font;
-    font.setBold(true);
+    if (item->getModelIndex() == (int)radioData->generalSettings.currModelIndex)
+      font.setBold(true);
+    if (radioData->models[item->getModelIndex()].modelUpdated)
+      font.setItalic(true);
     return font;
   }
 
@@ -315,6 +319,7 @@ QMimeData * ModelsListModel::mimeData(const QModelIndexList & indexes) const
   getModelsMimeData(indexes, mimeData);
   getGeneralMimeData(mimeData);
   getHeaderMimeData(mimeData);
+  getFileMimeData(mimeData);
   return mimeData;
 }
 
@@ -395,6 +400,16 @@ QMimeData *ModelsListModel::getHeaderMimeData(QMimeData * mimeData) const
   return mimeData;
 }
 
+QMimeData *ModelsListModel::getFileMimeData(QMimeData * mimeData) const
+{
+  if (!mimeData)
+    mimeData = new QMimeData();
+  QByteArray mData;
+  encodeFileData(&mData);
+  mimeData->setData("application/x-companion-filedata", mData);
+  return mimeData;
+}
+
 QUuid ModelsListModel::getMimeDataSourceId(const QMimeData * mimeData) const
 {
   MimeHeaderData header;
@@ -416,7 +431,7 @@ bool ModelsListModel::hasModelsMimeData(const QMimeData * mimeData) const
   return mimeData->hasFormat("application/x-companion-modeldata");
 }
 
-bool ModelsListModel::hasGenralMimeData(const QMimeData * mimeData) const
+bool ModelsListModel::hasGeneralMimeData(const QMimeData * mimeData) const
 {
   return mimeData->hasFormat("application/x-companion-generaldata");
 }
@@ -424,6 +439,11 @@ bool ModelsListModel::hasGenralMimeData(const QMimeData * mimeData) const
 bool ModelsListModel::hasHeaderMimeData(const QMimeData * mimeData) const
 {
   return mimeData->hasFormat("application/x-companion-radiodata-header");
+}
+
+bool ModelsListModel::hasFileMimeData(const QMimeData * mimeData) const
+{
+  return mimeData->hasFormat("application/x-companion-filedata");
 }
 
 // returns true if mime data origin was this data model (vs. from another file window)
@@ -457,6 +477,11 @@ void ModelsListModel::encodeHeaderData(QByteArray * data) const
   stream << mimeHeaderData.instanceId;
 }
 
+void ModelsListModel::encodeFileData(QByteArray * data) const
+{
+  *data = filename.toLatin1();
+}
+
 // static
 bool ModelsListModel::decodeHeaderData(const QMimeData * mimeData, MimeHeaderData * header)
 {
@@ -464,6 +489,16 @@ bool ModelsListModel::decodeHeaderData(const QMimeData * mimeData, MimeHeaderDat
     QByteArray data = mimeData->data("application/x-companion-radiodata-header");
     QDataStream stream(&data, QIODevice::ReadOnly);
     stream >> header->dataVersion >> header->instanceId;
+    return true;
+  }
+  return false;
+}
+
+// static
+bool ModelsListModel::decodeFileData(const QMimeData * mimeData, QString * filedata)
+{
+  if (filedata && mimeData->hasFormat("application/x-companion-filedata")) {
+    *filedata = mimeData->data("application/x-companion-filedata").data();
     return true;
   }
   return false;
@@ -618,7 +653,7 @@ void ModelsListModel::refresh()
     }
     else {
       current = rootItem->appendChild(i);
-      current->setData(currentColumn++, QString().sprintf("%02d", i + 1));
+      current->setData(currentColumn++, QString("%1").arg(i + 1, 2, 10, QChar('0')));
     }
 
     if (!model.isEmpty() && current) {
@@ -677,6 +712,11 @@ bool ModelsListModel::isModelIdUnique(unsigned modelIdx, unsigned module, unsign
     }
   }
   return true;
+}
+
+void ModelsListModel::setFilename(QString & name)
+{
+  filename = name;
 }
 
 /*

@@ -23,7 +23,7 @@
 
 #include <ctype.h>
 #include <stdio.h>
-#include "opentx.h"
+#include "edgetx.h"
 #include "stamp.h"
 #include "lua_api.h"
 #include "api_filesystem.h"
@@ -32,6 +32,10 @@
 #include "hal/rotary_encoder.h"
 #include "switches.h"
 #include "input_mapping.h"
+#if defined(LED_STRIP_GPIO)
+#include "boards/generic_stm32/rgb_leds.h"
+#endif
+
 
 #if defined(LIBOPENUI)
   #include "libopenui.h"
@@ -364,11 +368,6 @@ struct LuaSingleField {
 };
 
 const LuaSingleField luaSingleFields[] = {
-    {MIXSRC_FIRST_STICK,     "rud", "Rudder"},
-    {MIXSRC_FIRST_STICK + 1, "ele", "Elevator"},
-    {MIXSRC_FIRST_STICK + 2, "thr", "Throttle"},
-    {MIXSRC_FIRST_STICK + 3, "ail", "Aileron"},
-
 #if defined(IMU)
     {MIXSRC_TILT_X, "tiltx", "Tilt X"},
     {MIXSRC_TILT_Y, "tilty", "Tilt Y"},
@@ -382,18 +381,9 @@ const LuaSingleField luaSingleFields[] = {
     {MIXSRC_SPACEMOUSE_E, "sme", "SpaceMouse E"},
     {MIXSRC_SPACEMOUSE_F, "smf", "SpaceMouse F"},
 #endif
-    
+
+    {MIXSRC_MIN, "min", "MIN"},
     {MIXSRC_MAX, "max", "MAX"},
-
-    {MIXSRC_TrimRud, "trim-rud", "Rudder trim"},
-    {MIXSRC_TrimEle, "trim-ele", "Elevator trim"},
-    {MIXSRC_TrimThr, "trim-thr", "Throttle trim"},
-    {MIXSRC_TrimAil, "trim-ail", "Aileron trim"},
-
-#if MAX_TRIMS > 4
-    {MIXSRC_TrimT5, "trim-t5", "Aux trim T5"},
-    {MIXSRC_TrimT6, "trim-t6", "Aux trim T6"},
-#endif
 
     {MIXSRC_TX_VOLTAGE, "tx-voltage", "Transmitter battery voltage [volts]"},
     {MIXSRC_TX_TIME, "clock", "RTC clock [minutes from midnight]"},
@@ -423,7 +413,7 @@ const LuaMultipleField luaMultipleFields[] = {
     {MIXSRC_FIRST_HELI, "cyc", "Cyclic %d", 3},
 };
 
-static bool _searchSingleFields(const char* name, LuaField& field,
+static bool _searchSingleFieldsByName(const char* name, LuaField& field,
                                 unsigned int flags,
                                 const LuaSingleField* fields, size_t n_fields)
 {
@@ -453,14 +443,15 @@ bool luaFindFieldByName(const char * name, LuaField & field, unsigned int flags)
   field.name[sizeof(field.name) - 1] = '\0';
 
   // hardware specific inputs
-  if (_searchSingleFields(name, field, flags, _lua_inputs, DIM(_lua_inputs)))
+  if (_searchSingleFieldsByName(name, field, flags, _lua_inputs, DIM(_lua_inputs)))
     return true;
   
   // well known single fields
-  if (_searchSingleFields(name, field, flags, luaSingleFields, DIM(luaSingleFields)))
+  if (_searchSingleFieldsByName(name, field, flags, luaSingleFields, DIM(luaSingleFields)))
     return true;
 
   // check switches from 'sa' to 'sz'
+  // TODO: does not work with function switches!
   if (len == 2 && name[0] == 's' && name[1] >= 'a' && name[1] <= 'z') {
     auto c = name[1] - 'a' + 'A';
     auto sw_idx = switchLookupIdx(c);
@@ -540,6 +531,24 @@ bool luaFindFieldByName(const char * name, LuaField & field, unsigned int flags)
   return false;  // not found
 }
 
+static bool _searchSingleFieldsById(int id, LuaField& field,
+                                unsigned int flags,
+                                const LuaSingleField* fields, size_t n_fields)
+{
+  for (unsigned int n = 0; n < n_fields; ++n) {
+    if (id == fields[n].id) {
+      strncpy(field.name, fields[n].name, sizeof(field.name) - 1);
+      if (flags & FIND_FIELD_DESC) {
+        strncpy(field.desc, fields[n].desc, sizeof(field.desc) - 1);
+        field.desc[sizeof(field.desc) - 1] = '\0';
+      }
+      return true;
+    }
+  }
+
+  return false;
+}
+
 // Return field data for a given field id
 bool luaFindFieldById(int id, LuaField & field, unsigned int flags)
 {
@@ -547,17 +556,13 @@ bool luaFindFieldById(int id, LuaField & field, unsigned int flags)
   field.name[sizeof(field.name) - 1] = '\0';
   field.desc[0] = '\0';
 
-  // TODO better search method (binary lookup)
-  for (unsigned int n = 0; n < DIM(luaSingleFields); ++n) {
-    if (id == luaSingleFields[n].id) {
-      strncpy(field.name, luaSingleFields[n].name, sizeof(field.name) - 1);
-      if (flags & FIND_FIELD_DESC) {
-        strncpy(field.desc, luaSingleFields[n].desc, sizeof(field.desc) - 1);
-        field.desc[sizeof(field.desc) - 1] = '\0';
-      }
-      return true;
-    }
-  }
+  // hardware specific inputs
+  if (_searchSingleFieldsById(id, field, flags, _lua_inputs, DIM(_lua_inputs)))
+    return true;
+  
+  // well known single fields
+  if (_searchSingleFieldsById(id, field, flags, luaSingleFields, DIM(luaSingleFields)))
+    return true;
 
   // search in multiples
   for (unsigned int n = 0; n < DIM(luaMultipleFields); ++n) {
@@ -885,7 +890,7 @@ Return rotary encoder mode
 */
 static int luaGetRotEncMode(lua_State * L)
 {
-#if defined(ROTARY_ENCODER_NAVIGATION)
+#if defined(ROTARY_ENCODER_NAVIGATION) && !defined(USE_HATS_AS_KEYS)
   lua_pushunsigned(L, g_eeGeneral.rotEncMode);
 #else
   lua_pushunsigned(L, 0);
@@ -1182,10 +1187,12 @@ When called without parameters, it will only return the status of the output buf
 
 @status current Introduced in 2.2.0, retval nil added in 2.3.4
 */
-static int luaCrossfireTelemetryPush(lua_State * L)
+static int luaCrossfireTelemetryPush(lua_State* L)
 {
-  bool external = (moduleState[EXTERNAL_MODULE].protocol == PROTOCOL_CHANNELS_CROSSFIRE);
-  bool internal = (moduleState[INTERNAL_MODULE].protocol == PROTOCOL_CHANNELS_CROSSFIRE);
+  bool external =
+      (moduleState[EXTERNAL_MODULE].protocol == PROTOCOL_CHANNELS_CROSSFIRE);
+  bool internal =
+      (moduleState[INTERNAL_MODULE].protocol == PROTOCOL_CHANNELS_CROSSFIRE);
 
   if (!internal && !external) {
     lua_pushnil(L);
@@ -1194,27 +1201,51 @@ static int luaCrossfireTelemetryPush(lua_State * L)
 
   if (lua_gettop(L) == 0) {
     lua_pushboolean(L, outputTelemetryBuffer.isAvailable());
-  }
-  else if (lua_gettop(L) > TELEMETRY_OUTPUT_BUFFER_SIZE ) {
+  } else if (lua_gettop(L) > TELEMETRY_OUTPUT_BUFFER_SIZE) {
     lua_pushboolean(L, false);
     return 1;
-  }
-  else if (outputTelemetryBuffer.isAvailable()) {
+  } else if (outputTelemetryBuffer.isAvailable()) {
     uint8_t command = luaL_checkunsigned(L, 1);
     luaL_checktype(L, 2, LUA_TTABLE);
     uint8_t length = luaL_len(L, 2);
+
     outputTelemetryBuffer.pushByte(MODULE_ADDRESS);
-    outputTelemetryBuffer.pushByte(2 + length); // 1(COMMAND) + data length + 1(CRC)
-    outputTelemetryBuffer.pushByte(command); // COMMAND
-    for (int i=0; i<length; i++) {
-      lua_rawgeti(L, 2, i+1);
+
+    // LENGTH
+    if (command == COMMAND_ID) {
+      // 1(COMMAND) + length(data) + 1(CRC_BA) + 1(CRC_D5)
+      outputTelemetryBuffer.pushByte(3 + length);
+    } else {
+      // 1(COMMAND) + length(data) + 1(CRC_D5)
+      outputTelemetryBuffer.pushByte(2 + length);
+    }
+
+    // COMMAND
+    outputTelemetryBuffer.pushByte(command);
+
+    // PAYLOAD
+    for (int i = 0; i < length; i++) {
+      lua_rawgeti(L, 2, i + 1);
       outputTelemetryBuffer.pushByte(luaL_checkunsigned(L, -1));
     }
-    outputTelemetryBuffer.pushByte(crc8(outputTelemetryBuffer.data + 2, 1 + length));
+
+    // CRC
+    if (command == COMMAND_ID) {
+      // 1 byte CRC8_BA (counted from COMMAND byte)
+      outputTelemetryBuffer.pushByte(
+          crc8_BA(outputTelemetryBuffer.data + 2, 1 + length));
+      // 1 byte CRC8_D5 (counted from COMMAND byte including CRC8_BA byte)
+      outputTelemetryBuffer.pushByte(
+          crc8(outputTelemetryBuffer.data + 2, 2 + length));
+    } else {
+      // 1 byte CRC8_D5 (counted from COMMAND byte)
+      outputTelemetryBuffer.pushByte(
+          crc8(outputTelemetryBuffer.data + 2, 1 + length));
+    }
+
     outputTelemetryBuffer.setDestination(internal ? 0 : TELEMETRY_ENDPOINT_SPORT);
     lua_pushboolean(L, true);
-  }
-  else {
+  } else {
     lua_pushboolean(L, false);
   }
   return 1;
@@ -1420,35 +1451,53 @@ static int luaGetFlightMode(lua_State * L)
 }
 
 /*luadoc
-@function playFile(name)
+@function playFile(filename [, volume])
 
 Play a file from the SD card
 
-@param path (string) full path to wav file (i.e. “/SOUNDS/en/system/tada.wav”)
+@param filename (string) full path to wav file (i.e. “/SOUNDS/en/system/tada.wav”)
 Introduced in 2.1.0: If you use a relative path, the current language is appended
 to the path (example: for English language: `/SOUNDS/en` is appended)
 
-@status current Introduced in 2.0.0, changed in 2.1.0
+@param volume (number):
+ - (1..5) override radio settings Wav volume for the duration of file
+ - omitting the parameter uses radio settings Wav volume
+
+@retval none 
+
+@status current Introduced in 2.0.0, changed in 2.1.0, changed in 2.10
+
+// targets: BW, COLOR
+//
+// EXAMPLES:
+// playFile("armed.wav", 5) -- play file armed.wav, use Wav volume 2
+// playFile("armed.wav", 1) -- play file armed.wav, use Wav volume 1
+// playFile("armed.wav")		-- play file armed.wav, use radio settings Wav volume
 */
 static int luaPlayFile(lua_State * L)
 {
   const char * filename = luaL_checkstring(L, 1);
+  int volume = luaL_optinteger(L, 2, USE_SETTINGS_VOLUME);
+
+  if(volume != USE_SETTINGS_VOLUME)
+    volume = limit(-2, volume-3, 2);  // (rescale 1..5) to internal format and limit to (-2..2)
+
   if (filename[0] != '/') {
     // relative sound file path - use current language dir for absolute path
     char file[AUDIO_FILENAME_MAXLEN+1];
     char * str = getAudioPath(file);
     strncpy(str, filename, AUDIO_FILENAME_MAXLEN - (str-file));
     file[AUDIO_FILENAME_MAXLEN] = 0;
-    PLAY_FILE(file, 0, 0);
+    audioQueue.playFile(file, 0, 0, volume);
   }
   else {
-    PLAY_FILE(filename, 0, 0);
+    audioQueue.playFile(filename, 0, 0, volume);
   }
   return 0;
 }
 
 /*luadoc
-@function playNumber(value, unit [, attributes])
+@function playNumber(value, unit [, attributes [, volume]])
 
 Play a numerical value (text to speech)
 
@@ -1460,21 +1509,39 @@ Play a numerical value (text to speech)
  * `0 or not present` plays integral part of the number (for a number 123 it plays 123)
  * `PREC1` plays a number with one decimal place (for a number 123 it plays 12.3)
  * `PREC2` plays a number with two decimal places (for a number 123 it plays 1.23)
+ 
+ @param volume (number):
+ - (1..5) override radio settings Wav volume for the duration of file
+ - omitting the parameter uses radio settings Wav volume
 
-@status current Introduced in 2.0.0
+@retval none 
 
+@status current Introduced in 2.0.0, changed in 2.10
+
+// targets: BW, COLOR
+//
+// EXAMPLES:
+// playNumber(123, 3, 0, 5) -- play number 123, unit mAh, use Wav volume 5
+// playNumber(123, 3, 0, 1) -- play number 123, unit mAh, use Wav volume 1
+// playNumber(123, 3, 0)    -- play number 123, unit mAh, use radio settings Wav volume
 */
+
 static int luaPlayNumber(lua_State * L)
 {
   int number = luaL_checkinteger(L, 1);
   int unit = luaL_checkinteger(L, 2);
   unsigned int att = luaL_optunsigned(L, 3, 0);
-  playNumber(number, unit, att, 0);
+  int volume = luaL_optinteger(L, 4, USE_SETTINGS_VOLUME);
+
+  if(volume != USE_SETTINGS_VOLUME)
+    volume = limit(-2, volume-3, 2);  // (rescale 1..5) to internal format and limit to (-2..2)
+
+  playNumber(number, unit, att, 0, volume);
   return 0;
 }
 
 /*luadoc
-@function playDuration(duration [, hourFormat])
+@function playDuration(duration [, hourFormat [, volume]])
 
 Play a time value (text to speech)
 
@@ -1483,19 +1550,38 @@ Play a time value (text to speech)
 @param hourFormat (number):
  * `0 or not present` play format: minutes and seconds.
  * `!= 0` play format: hours, minutes and seconds.
+ * 
+@param volume (number):
+ - (1..5) override radio settings Wav volume for the duration of file
+ - omitting the parameter uses radio settings Wav volume
 
-@status current Introduced in 2.1.0
+@retval none 
+
+@status current Introduced in 2.1.0, changed in 2.10
+
+// targets: BW, COLOR
+//
+// EXAMPLES:
+// playDuration(101, 0, 5) -- play duration 101s, seconds format, use Wav volume 5
+// playDuration(101, 0, 1) -- play duration 101s, seconds format, use Wav volume 1
+// playDuration(101, 1)    -- play duration 101s, hour format, use radio settings Wav volume
 */
+
 static int luaPlayDuration(lua_State * L)
 {
   int duration = luaL_checkinteger(L, 1);
   bool playTime = (luaL_optinteger(L, 2, 0) != 0);
-  playDuration(duration, playTime ? PLAY_TIME : 0, 0);
+  int volume = luaL_optinteger(L, 3, USE_SETTINGS_VOLUME);
+
+  if(volume != USE_SETTINGS_VOLUME)
+    volume = limit(-2, volume-3, 2);  // (rescale 1..5) to internal format and limit to (-2..2)
+
+  playDuration(duration, playTime ? PLAY_TIME : 0, 0, volume);
   return 0;
 }
 
 /*luadoc
-@function playTone(frequency, duration, pause [, flags [, freqIncr]])
+@function playTone(frequency, duration, pause [, flags [, freqIncr [, volume]]])
 
 Play a tone
 
@@ -1514,7 +1600,20 @@ Play a tone
 negative number decreases it. The frequency changes every 10 milliseconds, the change is `freqIncr * 10Hz`.
 The valid range is from -127 to 127.
 
-@status current Introduced in 2.1.0
+@param volume (number):
+ - (1..5) override radio settings Beep volume for the duration of file
+ - omitting the parameter uses radio settings Beep volume
+
+@retval none 
+
+@status current Introduced in 2.1.0, changed in 2.10
+
+// targets: BW, COLOR
+//
+// EXAMPLES:
+// playTone(2550, 160, 20, 3, -10, 5) -- play tone, use Beep volume 5
+// playTone(2550, 160, 20, 3, -10, 1) -- play tone, use Beep volume 1
+// playTone(2550, 160, 20, 3, -10)		-- play tone, use radio settings Beep volume
 */
 static int luaPlayTone(lua_State * L)
 {
@@ -1523,7 +1622,36 @@ static int luaPlayTone(lua_State * L)
   int pause = luaL_checkinteger(L, 3);
   int flags = luaL_optinteger(L, 4, 0);
   int freqIncr = luaL_optinteger(L, 5, 0);
-  audioQueue.playTone(frequency, length, pause, flags, freqIncr);
+  int volume = luaL_optinteger(L, 6, USE_SETTINGS_VOLUME);
+
+  if(volume != USE_SETTINGS_VOLUME)
+    volume = limit(-2, volume-3, 2);  // (rescale 1..5) to internal format and limit to (-2..2)
+
+  audioQueue.playTone(frequency, length, pause, flags, freqIncr, volume);
+  return 0;
+}
+
+/*luadoc
+@name screenshot
+
+@description Takes a screenshot, which is saved to the SCREENSHOTS folder on the radio SD card.
+
+@syntax screenshot()
+
+@return none
+
+@notes This command is currently not rate limited, so repeated frequent calls will slow down the UI and can even freeze the entire radio, so should be used with care. 
+
+@target [BW]
+@target [GS]
+@target [COLOR]
+
+@status current Introduced in 2.11
+*/
+static int luaScreenshot(lua_State * L)
+{
+  UNUSED(L);
+  writeScreenshot();
   return 0;
 }
 
@@ -1567,11 +1695,11 @@ Stops key state machine. See [Key Events](../key_events.md) for the detailed des
 */
 static int luaKillEvents(lua_State * L)
 {
-#if defined(KEYS_GPIO_REG_PAGE)
+#if defined(KEYS_GPIO_REG_MENU)
   #define IS_MASKABLE(key)                                      \
     ((key) != KEY_EXIT && (key) != KEY_ENTER &&                 \
      ((scriptInternalData[0].reference == SCRIPT_STANDALONE) || \
-      (key) != KEY_PAGE))
+      (key) != KEY_PAGEDN))
 #else
   #define IS_MASKABLE(key) ((key) != KEY_EXIT && (key) != KEY_ENTER)
 #endif
@@ -1897,6 +2025,9 @@ static int luaSetTelemetryValue(lua_State * L)
       telemetrySensor.subId = subId;
       telemetrySensor.instance = instance;
       telemetrySensor.init(name ? name: name_buf, unit, prec);
+      
+      storageDirty(EE_MODEL);
+      
       lua_pushboolean(L, true);
     } else {
       lua_pushboolean(L, false);
@@ -1969,24 +2100,6 @@ static int luaGetRSSI(lua_State * L)
   lua_pushunsigned(L, g_model.rfAlarms.warning);
   lua_pushunsigned(L, g_model.rfAlarms.critical);
   return 3;
-}
-
-/*luadoc
-@function chdir(directory)
-
- Change the working directory
-
-@param directory (string) New working directory
-
-@status current Introduced in 2.3.0
-
-*/
-
-static int luaChdir(lua_State * L)
-{
-  const char * directory = luaL_optstring(L, 1, nullptr);
-  f_chdir(directory);
-  return 0;
 }
 
 /*luadoc
@@ -2079,7 +2192,15 @@ Get percent of already used Lua instructions in current script execution cycle.
 */
 static int luaGetUsage(lua_State * L)
 {
+#if defined(COLORLCD)
+  if (luaLvglManager && luaLvglManager->useLvglLayout()) {
+    lua_pushinteger(L, luaLvglManager->refreshInstructionsPercent);
+  } else {
+    lua_pushinteger(L, instructionsPercent);
+  }
+#else
   lua_pushinteger(L, instructionsPercent);
+#endif
   return 1;
 }
 
@@ -2179,24 +2300,13 @@ Set baudrate for serial port(s) affected to LUA
 */
 static int luaSetSerialBaudrate(lua_State * L)
 {
-// #if defined(AUX_SERIAL) || defined(AUX2_SERIAL)
-//   unsigned int baudrate = luaL_checkunsigned(L, 1);
-// #endif
+  int port_nr = serialGetModePort(UART_MODE_LUA);
+  if (port_nr < 0) return 0;
 
-// TODO: add some callbacks for serial settings
-// #if defined(AUX_SERIAL)
-//   if (auxSerialMode == UART_MODE_LUA) {
-//     auxSerialStop();
-//     auxSerialSetup(baudrate, false);
-//   }
-// #endif
-// #if defined(AUX2_SERIAL)
-//   if (aux2SerialMode == UART_MODE_LUA) {
-//     aux2SerialStop();
-//     aux2SerialSetup(baudrate, false);
-//   }
-// #endif
-  return 1;
+  uint32_t baudrate = luaL_checkunsigned(L, 1);
+  serialSetBaudrate(port_nr, baudrate);
+
+  return 0;
 }
 
 /*luadoc
@@ -2242,7 +2352,6 @@ Reads characters from the serial port. The string is allowed to contain any char
 */
 static int luaSerialRead(lua_State * L)
 {
-#if defined(LUA) && !defined(CLI)
   int num = luaL_optunsigned(L, 1, 0);
 
   uint8_t str[LUA_FIFO_SIZE];
@@ -2271,9 +2380,6 @@ static int luaSerialRead(lua_State * L)
     }
   }
   lua_pushlstring(L, (const char*)str, p - str);
-#else
-  lua_pushlstring(L, "", 0);
-#endif
 
   return 1;
 }
@@ -2771,6 +2877,50 @@ static int luaGetTrainerStatus(lua_State * L)
   return 1;
 }
 
+#if defined(LED_STRIP_GPIO)
+/*luadoc
+@function setRGBLedColor(id, rvalue, bvalue, cvalue)
+
+@param id: integer identifying a led in the led chain
+
+@param rvalue: interger, value of red channel
+
+@param gvalue: interger, value of green channel
+
+@param bvalue: interger, value of blue channel
+
+@status current Introduced in 2.10
+*/
+
+static int luaSetRgbLedColor(lua_State * L)
+{
+  uint8_t id = luaL_checkunsigned(L, 1);
+  uint8_t r = luaL_checkunsigned(L, 2);
+  uint8_t g = luaL_checkunsigned(L, 3);
+  uint8_t b = luaL_checkunsigned(L, 4);
+
+  rgbSetLedColor(id, r, g, b);
+
+  return 1;
+}
+
+/*luadoc
+@function applyRGBLedColors()
+
+ Apply RGB led colors previously defined by setRGBLedColor
+
+@status current Introduced in 2.10
+*/
+
+static int luaApplyRGBLedColors(lua_State * L)
+{
+
+  rgbLedColorApply();
+
+  return 1;
+}
+
+#endif
 
 #define KEY_EVENTS(xxx, yyy)                                    \
   { "EVT_"#xxx"_FIRST", LRO_NUMVAL(EVT_KEY_FIRST(yyy)) },       \
@@ -2804,6 +2954,7 @@ LROT_BEGIN(etxlib, NULL, 0)
   LROT_FUNCENTRY( playTone, luaPlayTone )
   LROT_FUNCENTRY( playHaptic, luaPlayHaptic )
   LROT_FUNCENTRY( flushAudio, luaFlushAudio )
+  LROT_FUNCENTRY( screenshot, luaScreenshot )
 #if defined(ENABLE_LUA_POPUP_INPUT)
   LROT_FUNCENTRY( popupInput, luaPopupInput )
 #endif
@@ -2813,7 +2964,6 @@ LROT_BEGIN(etxlib, NULL, 0)
   LROT_FUNCENTRY( defaultChannel, luaDefaultChannel )
   LROT_FUNCENTRY( getRSSI, luaGetRSSI )
   LROT_FUNCENTRY( killEvents, luaKillEvents )
-  LROT_FUNCENTRY( chdir, luaChdir )
   LROT_FUNCENTRY( loadScript, luaLoadScript )
   LROT_FUNCENTRY( getUsage, luaGetUsage )
   LROT_FUNCENTRY( getAvailableMemory, luaGetAvailableMemory )
@@ -2858,32 +3008,34 @@ LROT_BEGIN(etxlib, NULL, 0)
   LROT_FUNCENTRY( getSourceIndex, luaGetSourceIndex )
   LROT_FUNCENTRY( getSourceName, luaGetSourceName )
   LROT_FUNCENTRY( sources, luaSources )
+#if defined(LED_STRIP_GPIO)
+  LROT_FUNCENTRY(setRGBLedColor, luaSetRgbLedColor )
+  LROT_FUNCENTRY(applyRGBLedColors, luaApplyRGBLedColors )
+#endif
 LROT_END(etxlib, NULL, 0)
 
 LROT_BEGIN(etxcst, NULL, 0)
   // Constants
   LROT_NUMENTRY( FULLSCALE, RESX )
 #if defined(COLORLCD)
+  LROT_NUMENTRY( STDSIZE, FONT(STD) )
   LROT_NUMENTRY( XXLSIZE, FONT(XXL) )
   LROT_NUMENTRY( DBLSIZE, FONT(XL) )
   LROT_NUMENTRY( MIDSIZE, FONT(L) )
   LROT_NUMENTRY( SMLSIZE, FONT(XS) )
   LROT_NUMENTRY( TINSIZE, FONT(XXS) )
+  LROT_NUMENTRY( BOLD, FONT(BOLD) )
   LROT_NUMENTRY( BLINK, BLINK )
   LROT_NUMENTRY( INVERS, INVERS )
+  LROT_NUMENTRY( VCENTER, VCENTERED )
 #else
   LROT_NUMENTRY( XXLSIZE, XXLSIZE )
   LROT_NUMENTRY( DBLSIZE, DBLSIZE )
   LROT_NUMENTRY( MIDSIZE, MIDSIZE )
   LROT_NUMENTRY( SMLSIZE, SMLSIZE )
+  LROT_NUMENTRY( BOLD, BOLD )
   LROT_NUMENTRY( BLINK, BLINK )
   LROT_NUMENTRY( INVERS, INVERS )
-#endif
-#if defined(COLORLCD)
-  LROT_NUMENTRY( BOLD, FONT(BOLD) )
-  LROT_NUMENTRY( VCENTER, VCENTERED )
-#else
-  LROT_NUMENTRY( BOLD, BOLD )
 #endif
   LROT_NUMENTRY( RIGHT, RIGHT )
   LROT_NUMENTRY( LEFT, LEFT )
@@ -2893,6 +3045,7 @@ LROT_BEGIN(etxcst, NULL, 0)
   LROT_NUMENTRY( VALUE, INPUT_TYPE_VALUE )
   LROT_NUMENTRY( SOURCE, INPUT_TYPE_SOURCE )
   LROT_NUMENTRY( REPLACE, MLTPX_REPL )
+  LROT_NUMENTRY( MIXSRC_MIN, MIXSRC_MIN )
   LROT_NUMENTRY( MIXSRC_MAX, MIXSRC_MAX )
   LROT_NUMENTRY( MIXSRC_FIRST_INPUT, MIXSRC_FIRST_INPUT )
   #include "lua_mixsrc.inc"
@@ -2910,7 +3063,6 @@ LROT_BEGIN(etxcst, NULL, 0)
   LROT_NUMENTRY( LS_FUNC_VALMOSTEQUAL, LS_FUNC_VALMOSTEQUAL )
   LROT_NUMENTRY( LS_FUNC_VPOS, LS_FUNC_VPOS )
   LROT_NUMENTRY( LS_FUNC_VNEG, LS_FUNC_VNEG )
-  LROT_NUMENTRY( LS_FUNC_RANGE, LS_FUNC_RANGE )
   LROT_NUMENTRY( LS_FUNC_APOS, LS_FUNC_APOS )
   LROT_NUMENTRY( LS_FUNC_ANEG, LS_FUNC_ANEG )
   LROT_NUMENTRY( LS_FUNC_AND, LS_FUNC_AND )
@@ -2947,18 +3099,27 @@ LROT_BEGIN(etxcst, NULL, 0)
   LROT_NUMENTRY( FUNC_BACKLIGHT, FUNC_BACKLIGHT )
   LROT_NUMENTRY( FUNC_SCREENSHOT, FUNC_SCREENSHOT )
   LROT_NUMENTRY( FUNC_RACING_MODE, FUNC_RACING_MODE )
+#if defined(FUNCTION_SWITCHES)
+  LROT_NUMENTRY( FUNC_PUSH_CUST_SWITCH, FUNC_PUSH_CUST_SWITCH )
+#endif
+  LROT_NUMENTRY( FUNC_SET_SCREEN, FUNC_SET_SCREEN )
 #if defined(COLORLCD)
   LROT_NUMENTRY( FUNC_DISABLE_TOUCH, FUNC_DISABLE_TOUCH )
-  LROT_NUMENTRY( FUNC_SET_SCREEN, FUNC_SET_SCREEN )
 
   LROT_NUMENTRY( SHADOWED, SHADOWED )
+  // ZoneType::Integer == INPUT_TYPE_VALUE - use VALUE in widget options
+  // ZoneType::Source == INPUT_TYPE_SOURCE - use SOURCE in widget options
   LROT_NUMENTRY( COLOR, ZoneOption::Color )
   LROT_NUMENTRY( BOOL, ZoneOption::Bool )
   LROT_NUMENTRY( STRING, ZoneOption::String )
   LROT_NUMENTRY( TIMER, ZoneOption::Timer )
   LROT_NUMENTRY( TEXT_SIZE, ZoneOption::TextSize )
   LROT_NUMENTRY( ALIGNMENT, ZoneOption::Align )
-  LROT_NUMENTRY( MENU_HEADER_HEIGHT, COLOR2FLAGS(MENU_HEADER_HEIGHT) )
+  LROT_NUMENTRY( SWITCH, ZoneOption::Switch )
+  LROT_NUMENTRY( SLIDER, ZoneOption::Slider )
+  LROT_NUMENTRY( CHOICE, ZoneOption::Choice )
+  LROT_NUMENTRY( FILE, ZoneOption::File )
+  LROT_NUMENTRY( MENU_HEADER_HEIGHT, COLOR2FLAGS(EdgeTxStyles::MENU_HEADER_HEIGHT) )
 
   // Colors gui/colorlcd/colors.h
   LROT_NUMENTRY( COLOR_THEME_PRIMARY1, COLOR2FLAGS(COLOR_THEME_PRIMARY1_INDEX) )
@@ -3005,8 +3166,8 @@ LROT_BEGIN(etxcst, NULL, 0)
   LROT_NUMENTRY( WARNING_COLOR, COLOR2FLAGS(COLOR_THEME_WARNING_INDEX) )
 
   // Literal colors
-  LROT_NUMENTRY( BLACK, RGB2FLAGS(0x00, 0x00, 0x00) )
-  LROT_NUMENTRY( WHITE, RGB2FLAGS(0xFF, 0xFF, 0xFF) )
+  LROT_NUMENTRY( BLACK, COLOR2FLAGS(COLOR_BLACK_INDEX) )
+  LROT_NUMENTRY( WHITE, COLOR2FLAGS(COLOR_WHITE_INDEX) )
   LROT_NUMENTRY( LIGHTWHITE, RGB2FLAGS(0xEA, 0xEA, 0xEA) )
   LROT_NUMENTRY( YELLOW, RGB2FLAGS(0xFF, 0xFF, 0x00) )
   LROT_NUMENTRY( BLUE, RGB2FLAGS(0x00, 0x00, 0xFF) )
@@ -3027,148 +3188,10 @@ LROT_BEGIN(etxcst, NULL, 0)
   LROT_NUMENTRY( FIXEDWIDTH, FIXEDWIDTH )
 #endif
 
-// Virtual events
-#if defined(ROTARY_ENCODER_NAVIGATION)
-  LROT_NUMENTRY( EVT_VIRTUAL_PREV, EVT_ROTARY_LEFT )
-  LROT_NUMENTRY( EVT_VIRTUAL_NEXT, EVT_ROTARY_RIGHT )
-  LROT_NUMENTRY( EVT_VIRTUAL_DEC, EVT_ROTARY_LEFT )
-  LROT_NUMENTRY( EVT_VIRTUAL_INC, EVT_ROTARY_RIGHT )
-  LROT_NUMENTRY( ROTENC_LOWSPEED, ROTENC_LOWSPEED )
-  LROT_NUMENTRY( ROTENC_MIDSPEED, ROTENC_MIDSPEED )
-  LROT_NUMENTRY( ROTENC_HIGHSPEED, ROTENC_HIGHSPEED )
-#elif defined(PCBX9D) || defined(PCBX9DP) || defined(RADIO_T8) || defined(RADIO_COMMANDO8)// key reverted between field nav and value change
-  LROT_NUMENTRY( EVT_VIRTUAL_PREV, EVT_KEY_FIRST(KEY_PLUS) )
-  LROT_NUMENTRY( EVT_VIRTUAL_PREV_REPT, EVT_KEY_REPT(KEY_PLUS) )
-  LROT_NUMENTRY( EVT_VIRTUAL_NEXT, EVT_KEY_FIRST(KEY_MINUS) )
-  LROT_NUMENTRY( EVT_VIRTUAL_NEXT_REPT, EVT_KEY_REPT(KEY_MINUS) )
-  LROT_NUMENTRY( EVT_VIRTUAL_DEC, EVT_KEY_FIRST(KEY_MINUS) )
-  LROT_NUMENTRY( EVT_VIRTUAL_DEC_REPT, EVT_KEY_REPT(KEY_MINUS) )
-  LROT_NUMENTRY( EVT_VIRTUAL_INC, EVT_KEY_FIRST(KEY_PLUS) )
-  LROT_NUMENTRY( EVT_VIRTUAL_INC_REPT, EVT_KEY_REPT(KEY_PLUS) )
-#else
-  LROT_NUMENTRY( EVT_VIRTUAL_PREV, EVT_KEY_FIRST(KEY_UP) )
-  LROT_NUMENTRY( EVT_VIRTUAL_PREV_REPT, EVT_KEY_REPT(KEY_UP) )
-  LROT_NUMENTRY( EVT_VIRTUAL_NEXT, EVT_KEY_FIRST(KEY_DOWN) )
-  LROT_NUMENTRY( EVT_VIRTUAL_NEXT_REPT, EVT_KEY_REPT(KEY_DOWN) )
-  LROT_NUMENTRY( EVT_VIRTUAL_DEC, EVT_KEY_FIRST(KEY_DOWN) )
-  LROT_NUMENTRY( EVT_VIRTUAL_DEC_REPT, EVT_KEY_REPT(KEY_DOWN) )
-  LROT_NUMENTRY( EVT_VIRTUAL_INC, EVT_KEY_FIRST(KEY_UP) )
-  LROT_NUMENTRY( EVT_VIRTUAL_INC_REPT, EVT_KEY_REPT(KEY_UP) )
-#endif
+  // Key events
+  #include "lua_keys.inc"
 
-#if defined(NAVIGATION_9X)
-  LROT_NUMENTRY( EVT_VIRTUAL_PREV_PAGE, EVT_KEY_LONG(KEY_LEFT) )
-  LROT_NUMENTRY( EVT_VIRTUAL_NEXT_PAGE, EVT_KEY_BREAK(KEY_LEFT) )
-  LROT_NUMENTRY( EVT_VIRTUAL_MENU, EVT_KEY_BREAK(KEY_RIGHT) )
-  LROT_NUMENTRY( EVT_VIRTUAL_MENU_LONG, EVT_KEY_LONG(KEY_RIGHT) )
-  LROT_NUMENTRY( EVT_VIRTUAL_ENTER, EVT_KEY_BREAK(KEY_ENTER) )
-  LROT_NUMENTRY( EVT_VIRTUAL_ENTER_LONG, EVT_KEY_LONG(KEY_ENTER) )
-  LROT_NUMENTRY( EVT_VIRTUAL_EXIT, EVT_KEY_BREAK(KEY_EXIT) )
-#elif defined(NAVIGATION_XLITE)
-  LROT_NUMENTRY( EVT_VIRTUAL_PREV_PAGE, EVT_KEY_LONG(KEY_LEFT) )
-  LROT_NUMENTRY( EVT_VIRTUAL_NEXT_PAGE, EVT_KEY_LONG(KEY_RIGHT) )
-  LROT_NUMENTRY( EVT_VIRTUAL_MENU, EVT_KEY_BREAK(KEY_SHIFT) )
-  LROT_NUMENTRY( EVT_VIRTUAL_MENU_LONG, EVT_KEY_LONG(KEY_SHIFT) )
-  LROT_NUMENTRY( EVT_VIRTUAL_ENTER, EVT_KEY_BREAK(KEY_ENTER) )
-  LROT_NUMENTRY( EVT_VIRTUAL_ENTER_LONG, EVT_KEY_LONG(KEY_ENTER) )
-  LROT_NUMENTRY( EVT_VIRTUAL_EXIT, EVT_KEY_BREAK(KEY_EXIT) )
-#elif defined(NAVIGATION_X7) || defined(NAVIGATION_X9D)
-#if defined(RADIO_TX12) || defined(RADIO_TX12MK2) || defined(RADIO_BOXER) || defined(RADIO_ZORRO)  || defined(RADIO_T8) || defined(RADIO_COMMANDO8)
-  LROT_NUMENTRY( EVT_VIRTUAL_PREV_PAGE, EVT_KEY_BREAK(KEY_PAGEUP) )
-  LROT_NUMENTRY( EVT_VIRTUAL_NEXT_PAGE, EVT_KEY_BREAK(KEY_PAGEDN) )
-  LROT_NUMENTRY( EVT_VIRTUAL_MENU, EVT_KEY_BREAK(KEY_MODEL) )
-  LROT_NUMENTRY( EVT_VIRTUAL_MENU_LONG, EVT_KEY_LONG(KEY_MODEL) )
-#else
-  LROT_NUMENTRY( EVT_VIRTUAL_PREV_PAGE, EVT_KEY_LONG(KEY_PAGE) )
-  LROT_NUMENTRY( EVT_VIRTUAL_NEXT_PAGE, EVT_KEY_BREAK(KEY_PAGE) )
-  LROT_NUMENTRY( EVT_VIRTUAL_MENU, EVT_KEY_BREAK(KEY_MENU) )
-  LROT_NUMENTRY( EVT_VIRTUAL_MENU_LONG, EVT_KEY_LONG(KEY_MENU) )
-#endif
-  LROT_NUMENTRY( EVT_VIRTUAL_ENTER, EVT_KEY_BREAK(KEY_ENTER) )
-  LROT_NUMENTRY( EVT_VIRTUAL_ENTER_LONG, EVT_KEY_LONG(KEY_ENTER) )
-  LROT_NUMENTRY( EVT_VIRTUAL_EXIT, EVT_KEY_BREAK(KEY_EXIT) )
-#elif defined(COLORLCD)
-#if defined(KEYS_GPIO_REG_PAGEUP)
-  LROT_NUMENTRY( EVT_VIRTUAL_PREV_PAGE, EVT_KEY_BREAK(KEY_PAGEUP) )
-  LROT_NUMENTRY( EVT_VIRTUAL_NEXT_PAGE, EVT_KEY_BREAK(KEY_PAGEDN) )
-#elif defined(PCBNV14)
-  LROT_NUMENTRY( EVT_VIRTUAL_PREV_PAGE, EVT_KEY_BREAK(KEY_LEFT) )
-  LROT_NUMENTRY( EVT_VIRTUAL_NEXT_PAGE, EVT_KEY_BREAK(KEY_RIGHT) )
-#else
-  LROT_NUMENTRY( EVT_VIRTUAL_PREV_PAGE, EVT_KEY_LONG(KEY_PAGEDN) )
-  LROT_NUMENTRY( EVT_VIRTUAL_NEXT_PAGE, EVT_KEY_BREAK(KEY_PAGEDN) )
-#endif
-  LROT_NUMENTRY( EVT_VIRTUAL_MENU, EVT_KEY_BREAK(KEY_MODEL) )
-  LROT_NUMENTRY( EVT_VIRTUAL_MENU_LONG, EVT_KEY_LONG(KEY_MODEL) )
-  LROT_NUMENTRY( EVT_VIRTUAL_ENTER, EVT_KEY_BREAK(KEY_ENTER) )
-  LROT_NUMENTRY( EVT_VIRTUAL_ENTER_LONG, EVT_KEY_LONG(KEY_ENTER) )
-  LROT_NUMENTRY( EVT_VIRTUAL_EXIT, EVT_KEY_BREAK(KEY_EXIT) )
-#endif
-
-  LROT_NUMENTRY( EVT_EXIT_BREAK, EVT_KEY_BREAK(KEY_EXIT) )
-
-#if defined(KEYS_GPIO_REG_ENTER)
-  KEY_EVENTS(ENTER, KEY_ENTER)
-#endif
-
-#if defined(KEYS_GPIO_REG_MENU)
-  KEY_EVENTS(MENU, KEY_MENU)
-#endif
-
-#if defined(KEYS_GPIO_REG_RIGHT) && defined(COLORLCD)
-  KEY_EVENTS(TELEM, KEY_TELE)
-#elif defined(KEYS_GPIO_REG_RIGHT)
-  KEY_EVENTS(RIGHT, KEY_RIGHT)
-#endif
-
-#if defined(KEYS_GPIO_REG_UP) && defined(COLORLCD)
-  KEY_EVENTS(MODEL, KEY_MODEL)
-#elif defined(KEYS_GPIO_REG_UP)
-  KEY_EVENTS(UP, KEY_UP)
-#endif
-
-#if defined(KEYS_GPIO_REG_LEFT) && defined(COLORLCD)
-  KEY_EVENTS(SYS, KEY_SYS)
-#elif defined(KEYS_GPIO_REG_LEFT)
-  KEY_EVENTS(LEFT, KEY_LEFT)
-#endif
-
-#if defined(KEYS_GPIO_REG_DOWN) && defined(COLORLCD)
-  LROT_NUMENTRY( EVT_RTN_FIRST, EVT_KEY_BREAK(KEY_EXIT) )
-#elif defined(KEYS_GPIO_REG_DOWN)
-  KEY_EVENTS(DOWN, KEY_DOWN)
-#endif
-
-#if defined(KEYS_GPIO_REG_PAGEUP)
-  KEY_EVENTS(PAGEUP, KEY_PAGEUP)
-#endif
-
-#if defined(KEYS_GPIO_REG_PAGEDN)
-  KEY_EVENTS(PAGEDN, KEY_PAGEDN)
-#endif
-
-#if defined(KEYS_GPIO_REG_PAGE)
-  KEY_EVENTS(PAGE, KEY_PAGE)
-#endif
-
-#if defined(KEYS_GPIO_REG_SHIFT)
-  KEY_EVENTS(SHIFT, KEY_SHIFT)
-#endif
-
-#if defined(KEYS_GPIO_REG_PLUS)
-  KEY_EVENTS(PLUS, KEY_PLUS)
-#endif
-
-#if defined(KEYS_GPIO_REG_MINUS)
-  KEY_EVENTS(MINUS, KEY_MINUS)
-#endif
-
-#if defined(ROTARY_ENCODER_NAVIGATION)
-  KEY_EVENTS(ROT, KEY_ENTER)
-  LROT_NUMENTRY( EVT_ROT_LEFT, EVT_ROTARY_LEFT )
-  LROT_NUMENTRY( EVT_ROT_RIGHT, EVT_ROTARY_RIGHT )
-#endif
-
+// touch events
 #if defined(HARDWARE_TOUCH)
   LROT_NUMENTRY( EVT_TOUCH_FIRST, EVT_TOUCH_FIRST )
   LROT_NUMENTRY( EVT_TOUCH_BREAK, EVT_TOUCH_BREAK )
@@ -3176,6 +3199,7 @@ LROT_BEGIN(etxcst, NULL, 0)
   LROT_NUMENTRY( EVT_TOUCH_TAP, EVT_TOUCH_TAP )
 #endif
 
+// misc definitions
 #if LCD_DEPTH > 1 && !defined(COLORLCD)
   LROT_NUMENTRY( FILL_WHITE, FILL_WHITE )
   LROT_NUMENTRY( GREY_DEFAULT, GREY_DEFAULT )
@@ -3194,7 +3218,13 @@ LROT_BEGIN(etxcst, NULL, 0)
   LROT_NUMENTRY( PLAY_NOW, PLAY_NOW )
   LROT_NUMENTRY( PLAY_BACKGROUND, PLAY_BACKGROUND )
   LROT_NUMENTRY( TIMEHOUR, TIMEHOUR )
-
+#if defined(LED_STRIP_GPIO)
+  #if defined(RADIO_V16)
+    LROT_NUMENTRY( LED_STRIP_LENGTH, LED_STRIP_LENGTH - 6)
+  #else
+    LROT_NUMENTRY( LED_STRIP_LENGTH, LED_STRIP_LENGTH )
+  #endif
+#endif
   LROT_NUMENTRY( UNIT_RAW, UNIT_RAW )
   LROT_NUMENTRY( UNIT_VOLTS, UNIT_VOLTS )
   LROT_NUMENTRY( UNIT_AMPS, UNIT_AMPS )
@@ -3224,6 +3254,7 @@ LROT_BEGIN(etxcst, NULL, 0)
   LROT_NUMENTRY( UNIT_HERTZ, UNIT_HERTZ )
   LROT_NUMENTRY( UNIT_MS, UNIT_MS )
   LROT_NUMENTRY( UNIT_US, UNIT_US )
+  LROT_NUMENTRY( UNIT_DBM, UNIT_DBM )
   LROT_NUMENTRY( UNIT_HOURS, UNIT_HOURS )
   LROT_NUMENTRY( UNIT_MINUTES, UNIT_MINUTES )
   LROT_NUMENTRY( UNIT_SECONDS, UNIT_SECONDS )

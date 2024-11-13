@@ -20,7 +20,7 @@
  */
 
 #include <stdio.h>
-#include "opentx.h"
+#include "edgetx.h"
 #include "frsky_firmware_update.h"
 #include "debug.h"
 #include "timers_driver.h"
@@ -29,7 +29,7 @@
 #if defined(LIBOPENUI)
   #include "libopenui.h"
 #else
-  #include "libopenui/src/libopenui_file.h"
+  #include "lib_file.h"
 #endif
 
 #include "hal/module_port.h"
@@ -343,7 +343,7 @@ const char *FrskyDeviceFirmwareUpdate::doFlashFirmware(
   //
   uint8_t serial_module = module != SPORT_MODULE ? module : EXTERNAL_MODULE;
 
-  mod_st = modulePortInitSerial(serial_module, port, &cfg);
+  mod_st = modulePortInitSerial(serial_module, port, &cfg, false);
   if (!mod_st) return "Communication port error";
 
   // assume RX port is the same as TX
@@ -377,6 +377,7 @@ const char *FrskyDeviceFirmwareUpdate::uploadFileToHorusXJT(
   UINT count;
   uint8_t frame[8];
 
+  uart_drv->clearRxBuffer(uart_ctx);
   if (!readBuffer(frame, 8, 100) || frame[0] != 0x01) {
     return STR_DEVICE_NO_RESPONSE;
   }

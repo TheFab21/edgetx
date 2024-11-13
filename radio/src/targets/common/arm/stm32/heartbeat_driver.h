@@ -21,8 +21,9 @@
 
 #pragma once
 
+#include <stdint.h>
+
 struct HeartbeatCapture {
-  uint32_t timestamp;
   uint8_t valid;
 #if defined(DEBUG_LATENCY)
   uint32_t count;

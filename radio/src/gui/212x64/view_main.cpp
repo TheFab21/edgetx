@@ -19,10 +19,11 @@
  * GNU General Public License for more details.
  */
 
-#include "opentx.h"
+#include "edgetx.h"
 #include "hal/trainer_driver.h"
 #include "hal/adc_driver.h"
 #include "hal/switch_driver.h"
+#include "hal/usb_driver.h"
 
 #include "switches.h"
 #include "input_mapping.h"
@@ -76,47 +77,66 @@ const unsigned char icons[]  = {
 #define ICON_REBOOT   91, 11
 #define ICON_ALTITUDE 102, 9
 
+#if defined(ASTERISK) || (!defined(USE_WATCHDOG) && !defined(SIMU)) || defined(LOG_TELEMETRY) || \
+    defined(LOG_BLUETOOTH) || defined(DEBUG_LATENCY)
+
+static bool isAsteriskDisplayed() {
+  return true;
+}
+
+#else
+
+#include "hal/abnormal_reboot.h"
+
+static bool isAsteriskDisplayed() {  
+  return UNEXPECTED_SHUTDOWN();
+}
+#endif
+
 void doMainScreenGraphics()
 {
   int16_t calibStickVert = calibratedAnalogs[ADC_MAIN_LV];
-  if (g_model.throttleReversed && inputMappingConvertMode(ADC_MAIN_LV) == THR_STICK)
+  if (g_model.throttleReversed &&
+      inputMappingConvertMode(ADC_MAIN_LV) == inputMappingGetThrottle()) {
     calibStickVert = -calibStickVert;
+  }
   drawStick(LBOX_CENTERX, calibratedAnalogs[ADC_MAIN_LH], calibStickVert);
 
   calibStickVert = calibratedAnalogs[ADC_MAIN_RV];
-  if (g_model.throttleReversed && inputMappingConvertMode(ADC_MAIN_RV) == THR_STICK)
+  if (g_model.throttleReversed &&
+      inputMappingConvertMode(ADC_MAIN_RV) == inputMappingGetThrottle()) {
     calibStickVert = -calibStickVert;
+  }
   drawStick(RBOX_CENTERX, calibratedAnalogs[ADC_MAIN_RH], calibStickVert);
 }
 
 void displayTrims(uint8_t phase)
 {
+  static uint8_t x[] = { TRIM_LH_X, TRIM_LV_X, TRIM_RV_X, TRIM_RH_X };
+  static uint8_t vert[] = { 0, 1, 1, 0 };
+
   for (unsigned int i = 0; i < MAX_STICKS; i++) {
-    coord_t x[] = { TRIM_LH_X, TRIM_LV_X, TRIM_RV_X, TRIM_RH_X };
-    uint8_t vert[] = { 0, 1, 1, 0 };
-    coord_t xm, ym;
+    if(getRawTrimValue(phase, i).mode == TRIM_MODE_NONE || getRawTrimValue(phase, i).mode == TRIM_MODE_3POS)
+      continue;
+
+    coord_t ym;
     unsigned int stickIndex = inputMappingConvertMode(i);
-    xm = x[stickIndex];
+    coord_t xm = x[stickIndex];
 
     uint32_t att = ROUND;
     int32_t trim = getTrimValue(phase, i);
     int32_t val = trim;
     bool exttrim = false;
 
-    if(getRawTrimValue(phase, i).mode == TRIM_MODE_NONE)
-      continue;
-
     if (val < TRIM_MIN || val > TRIM_MAX) {
       exttrim = true;
     }
-    if (val < -(TRIM_LEN+1)*4) {
-      val = -(TRIM_LEN+1);
+    val = (val * TRIM_LEN) / TRIM_MAX;
+    if (val < -TRIM_LEN) {
+      val = -TRIM_LEN;
     }
-    else if (val > (TRIM_LEN+1)*4) {
-      val = TRIM_LEN+1;
-    }
-    else {
-      val /= 4;
+    else if (val > TRIM_LEN) {
+      val = TRIM_LEN;
     }
 
     if (vert[i]) {
@@ -183,8 +203,8 @@ static const coord_t _pot_slots[] = {
 void drawSliders()
 {
   uint8_t slot_idx = 0;
-  uint8_t max_pots = adcGetMaxInputs(ADC_INPUT_POT);
-  uint8_t offset = adcGetInputOffset(ADC_INPUT_POT);
+  uint8_t max_pots = adcGetMaxInputs(ADC_INPUT_FLEX);
+  uint8_t offset = adcGetInputOffset(ADC_INPUT_FLEX);
 
   for (uint8_t i = 0; i < max_pots; i++) {
 
@@ -194,7 +214,7 @@ void drawSliders()
     if (!IS_SLIDER(i)) continue;
 #else
     // Skip POT3
-    if (i == 2) continue;
+    if (i == 2 && !IS_SLIDER(i)) continue;
 #endif
     
     coord_t x = _pot_slots[slot_idx++];
@@ -287,12 +307,12 @@ void displayTopBar()
   }
 
   if (SLAVE_MODE()) {
-    if (is_trainer_connected()) {
+    if (is_trainer_dsc_connected()) {
       LCD_NOTIF_ICON(x, ICON_TRAINEE);
       x -= 12;
     }
   }
-  else if (IS_TRAINER_INPUT_VALID()) {
+  else if (isTrainerConnected()) {
     LCD_NOTIF_ICON(x, ICON_TRAINER);
     x -= 12;
   }
@@ -315,7 +335,7 @@ void displayTopBar()
     LCD_ICON(BAR_VOLUME_X, BAR_Y, ICON_SPEAKER3);
 
   /* RTC time */
-  drawRtcTime(BAR_TIME_X, BAR_Y+1, LEFT|TIMEBLINK);
+  if (rtcIsValid()) drawRtcTime(BAR_TIME_X, BAR_Y+1, LEFT|TIMEBLINK);
 
   /* The background */
   lcdDrawFilledRect(BAR_X, BAR_Y, BAR_W, BAR_H, SOLID, FILL_WHITE|GREY(12)|ROUND);
@@ -349,7 +369,7 @@ void displayTimers()
         val = (int)timerData.start - (int)timerState.val;
       drawTimer(TIMERS_X, y, val, TIMEHOUR|MIDSIZE|LEFT, TIMEHOUR|MIDSIZE|LEFT);
       if (timerData.persistent) {
-        lcdDrawChar(TIMERS_R, y+1, 'P', SMLSIZE);
+        lcdDrawChar(TIMERS_R, y-7, 'P', SMLSIZE);
       }
       if (timerState.val < 0) {
         if (BLINK_ON_PHASE) {
@@ -363,7 +383,7 @@ void displayTimers()
 void menuMainViewChannelsMonitor(event_t event)
 {
   switch(event) {
-    case EVT_KEY_BREAK(KEY_PAGE):
+    case EVT_KEY_BREAK(KEY_PAGEDN):
     case EVT_KEY_BREAK(KEY_EXIT):
       chainMenu(menuMainView);
       event = 0;
@@ -390,12 +410,7 @@ void onMainViewMenu(const char * result)
     pushModelNotes();
   }
   else if (result == STR_RESET_SUBMENU) {
-    POPUP_MENU_ADD_ITEM(STR_RESET_FLIGHT);
-    POPUP_MENU_ADD_ITEM(STR_RESET_TIMER1);
-    POPUP_MENU_ADD_ITEM(STR_RESET_TIMER2);
-    POPUP_MENU_ADD_ITEM(STR_RESET_TIMER3);
-    POPUP_MENU_ADD_ITEM(STR_RESET_TELEMETRY);
-    POPUP_MENU_START(onMainViewMenu);
+    POPUP_MENU_START(onMainViewMenu, 5, STR_RESET_FLIGHT, STR_RESET_TIMER1, STR_RESET_TIMER2, STR_RESET_TIMER3, STR_RESET_TELEMETRY);
   }
   else if (result == STR_RESET_TELEMETRY) {
     telemetryReset();
@@ -457,14 +472,10 @@ void menuMainView(event_t event)
       break;
 
     case EVT_KEY_LONG(KEY_ENTER):
-      killEvents(event);
       if (modelHasNotes()) {
         POPUP_MENU_ADD_ITEM(STR_VIEW_NOTES);
       }
-      POPUP_MENU_ADD_ITEM(STR_RESET_SUBMENU);
-      POPUP_MENU_ADD_ITEM(STR_STATISTICS);
-      POPUP_MENU_ADD_ITEM(STR_ABOUT_US);
-      POPUP_MENU_START(onMainViewMenu);
+      POPUP_MENU_START(onMainViewMenu, 3, STR_RESET_SUBMENU, STR_STATISTICS, STR_ABOUT_US);
       break;
 
     case EVT_KEY_BREAK(KEY_MENU):
@@ -473,10 +484,9 @@ void menuMainView(event_t event)
 
     case EVT_KEY_LONG(KEY_MENU):
       pushMenu(menuTabGeneral[0].menuFunc);
-      killEvents(event);
       break;
 
-    case EVT_KEY_BREAK(KEY_PAGE):
+    case EVT_KEY_BREAK(KEY_PAGEDN):
       storageDirty(EE_MODEL);
       g_model.view += 1;
       if (g_model.view >= VIEW_COUNT) {
@@ -485,9 +495,8 @@ void menuMainView(event_t event)
       }
       break;
 
-    case EVT_KEY_LONG(KEY_PAGE):
+    case EVT_KEY_BREAK(KEY_PAGEUP):
       chainMenu(menuViewTelemetry);
-      killEvents(event);
       break;
 
     case EVT_KEY_FIRST(KEY_EXIT):
@@ -534,7 +543,7 @@ void menuMainView(event_t event)
   uint8_t switches = switchGetMaxSwitches();
   if (getSwitchCount() > 16) {    // beware, there is a desired col/row swap in this special mode
     for (int i = 0; i < switches; ++i) {
-      if (SWITCH_EXISTS(i)) {
+      if (SWITCH_EXISTS(i) && !switchIsFlex(i)) {
         auto switch_display = switchGetDisplayPosition(i);
         if (g_model.view == VIEW_INPUTS) {
           coord_t x = 50 + (switch_display.row % 5) * 4 +
@@ -552,7 +561,7 @@ void menuMainView(event_t event)
   else {
     coord_t shiftright = switchGetMaxRow(1) < 4 ? 20 : 0;
     for (int i = 0; i < switches; ++i) {
-      if (SWITCH_EXISTS(i)) {
+      if (SWITCH_EXISTS(i) && !switchIsFlex(i)) {
         auto switch_display = switchGetDisplayPosition(i);
         if (g_model.view == VIEW_INPUTS) {
           coord_t x = (switch_display.col == 0 ? 50 : 125) +

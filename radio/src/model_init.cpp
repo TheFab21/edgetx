@@ -19,9 +19,10 @@
  * GNU General Public License for more details.
  */
 
-#include "opentx.h"
+#include "edgetx.h"
 #include "hal/adc_driver.h"
 #include "input_mapping.h"
+#include "mixes.h"
 
 void clearInputs()
 {
@@ -117,24 +118,26 @@ void applyDefaultTemplate()
 
 #if defined(COLORLCD)
 
-  loadDefaultLayout();
+  LayoutFactory::loadDefaultLayout();
 
   // enable switch warnings
-  for (int i = 0; i < MAX_SWITCHES; i++) {
+  for (uint64_t i = 0; i < MAX_SWITCHES; i++) {
     if (SWITCH_EXISTS(i)) {
-      g_model.switchWarningState |= (1 << (3 * i));
+      g_model.switchWarning |= (1ull << (3ull * i));
     }
   }
 #else
   // enable switch warnings
-  for (int i = 0; i < MAX_SWITCHES; i++) {
+  for (uint64_t i = 0; i < MAX_SWITCHES; i++) {
     if (SWITCH_WARNING_ALLOWED(i))
-      g_model.switchWarningState |= (1 << (3 * i));
+      g_model.switchWarning |= (1ull << (3ull * i));
   }
 #endif
 
+#if defined(USE_HATS_AS_KEYS)
+  g_model.hatsMode = HATSMODE_GLOBAL;
+#endif
 }
-
 
 void setModelDefaults(uint8_t id)
 {
@@ -149,7 +152,7 @@ void setModelDefaults(uint8_t id)
 #endif
   strAppendUnsigned(strAppend(g_model.header.name, STR_MODEL), id, 2);
 
-#if defined(LUA) && defined(PCBTARANIS) // Horus uses menuModelWizard() for wizard
+#if defined(LUA) && defined(PCBTARANIS)
   if (isFileAvailable(WIZARD_PATH "/" WIZARD_NAME)) {
     f_chdir(WIZARD_PATH);
     luaExec(WIZARD_NAME);

@@ -24,6 +24,7 @@
 #include "stm32_hal_ll.h"
 #include "hal/adc_driver.h"
 
+#define MAX_ADC_INPUTS 32
 
 struct stm32_adc_input_t {
   GPIO_TypeDef* GPIOx;
@@ -66,4 +67,5 @@ void stm32_hal_adc_disable_oversampling();
 void stm32_hal_adc_dma_isr(const stm32_adc_t* adc);
 void stm32_hal_adc_isr(const stm32_adc_t* adc);
 
-void stm32_hal_mask_inputs(uint32_t inputs);
+void stm32_hal_set_inputs_mask(uint32_t inputs);
+uint32_t stm32_hal_get_inputs_mask();

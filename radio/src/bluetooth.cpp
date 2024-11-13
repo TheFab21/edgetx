@@ -20,14 +20,15 @@
  */
 
 #include <stdio.h>
-#include "opentx.h"
+#include "edgetx.h"
 #include "io/frsky_firmware_update.h"
 #include "bluetooth_driver.h"
+#include "trainer.h"
 
 #if defined(LIBOPENUI)
   #include "libopenui.h"
 #else
-  #include "libopenui/src/libopenui_file.h"
+  #include "lib_file.h"
 #endif
 
 #if defined(LOG_BLUETOOTH)
@@ -141,11 +142,11 @@ void Bluetooth::processTrainerFrame(const uint8_t * buffer)
 {
   for (uint8_t channel=0, i=1; channel<BLUETOOTH_TRAINER_CHANNELS; channel+=2, i+=3) {
     // +-500 != 512, but close enough.
-    ppmInput[channel] = buffer[i] + ((buffer[i+1] & 0xf0) << 4) - 1500;
-    ppmInput[channel+1] = ((buffer[i+1] & 0x0f) << 4) + ((buffer[i+2] & 0xf0) >> 4) + ((buffer[i+2] & 0x0f) << 8) - 1500;
+    trainerInput[channel] = buffer[i] + ((buffer[i+1] & 0xf0) << 4) - 1500;
+    trainerInput[channel+1] = ((buffer[i+1] & 0x0f) << 4) + ((buffer[i+2] & 0xf0) >> 4) + ((buffer[i+2] & 0x0f) << 8) - 1500;
   }
 
-  ppmInputValidityTimer = PPM_IN_VALID_TIMEOUT;
+  trainerResetTimer();
 }
 
 void Bluetooth::appendTrainerByte(uint8_t data)
@@ -412,6 +413,15 @@ void Bluetooth::wakeup()
     return;
   }
 
+#if defined(BT_PWR_GPIO)
+  if (g_eeGeneral.bluetoothMode == BLUETOOTH_OFF) {
+    bluetoothDisable();
+    state = BLUETOOTH_STATE_OFF;
+    wakeupTime = now + 10; /* 100ms */
+    return;
+  }
+#endif
+
   if (g_eeGeneral.bluetoothMode == BLUETOOTH_OFF ||
       (g_eeGeneral.bluetoothMode == BLUETOOTH_TRAINER &&
        !IS_BLUETOOTH_TRAINER())) {
@@ -470,7 +480,7 @@ void Bluetooth::wakeup()
     } else if (state == BLUETOOTH_STATE_NAME_SENT && (line != nullptr) &&
                (!strncmp(line, "OK+", 3) || !strncmp(line, "Central:", 8) ||
                 !strncmp(line, "Peripheral:", 11))) {
-      writeString("AT+TXPW0");
+      writeString("AT+TXPW2");
       state = BLUETOOTH_STATE_POWER_SENT;
     } else if (state == BLUETOOTH_STATE_POWER_SENT &&
                (line != nullptr) &&

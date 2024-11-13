@@ -19,11 +19,12 @@
  * GNU General Public License for more details.
  */
 
-#include "opentx.h"
-#include "opentx_helpers.h"
+#include "hal/adc_driver.h"
+#include "myeeprom.h"
+#include "edgetx.h"
+#include "edgetx_helpers.h"
 #include "storage.h"
 #include "sdcard_common.h"
-#include "sdcard_raw.h"
 #include "sdcard_yaml.h"
 #include "modelslist.h"
 
@@ -31,12 +32,6 @@
 #include "yaml/yaml_parser.h"
 #include "yaml/yaml_datastructs.h"
 #include "yaml/yaml_bits.h"
-
-
-#if defined(EEPROM_RLC)
- #include "storage/eeprom_common.h"
- #include "storage/eeprom_rlc.h"
-#endif
 
 const char * readYamlFile(const char* fullpath, const YamlParserCalls* calls, void* parser_ctx, ChecksumResult* checksum_result)
 {
@@ -184,6 +179,8 @@ const char * loadRadioSettings()
 #if defined(DEFAULT_INTERNAL_MODULE)
     g_eeGeneral.internalModule = DEFAULT_INTERNAL_MODULE;
 #endif
+
+    adcCalibDefaults();
 
     const char* error = loadRadioSettingsYaml(true);
     if (!error) {
@@ -347,7 +344,7 @@ const char * readModelYaml(const char * filename, uint8_t * buffer, uint32_t siz
       auto md = reinterpret_cast<ModelData*>(buffer);
 #if defined(FLIGHT_MODES) && defined(GVARS)
       // reset GVars to default values
-      // Note: taken from opentx.cpp::modelDefault()
+      // Note: taken from edgetx.cpp::modelDefault()
       //TODO: new func in gvars
       for (int p=1; p<MAX_FLIGHT_MODES; p++) {
         for (int i=0; i<MAX_GVARS; i++) {
@@ -456,7 +453,13 @@ bool copyModel(uint8_t dst, uint8_t src)
   GET_FILENAME(fname_src, MODELS_PATH, model_idx_src, YAML_EXT);
   GET_FILENAME(fname_dst, MODELS_PATH, model_idx_dst, YAML_EXT);
 
-  return sdCopyFile(fname_src, fname_dst);
+  if (sdCopyFile(fname_src, fname_dst) == nullptr) {
+    // update headers
+    memcpy(&modelHeaders[dst], &modelHeaders[src], sizeof(ModelHeader));
+    return true;
+  }
+
+  return false;
 }
 
 static void swapModelHeaders(uint8_t id1, uint8_t id2)
@@ -601,5 +604,9 @@ const char * restoreModel(uint8_t idx, char *model_name)
 bool storageReadRadioSettings(bool checks)
 {
   if (!sdMounted()) sdInit();
-  return loadRadioSettingsYaml(checks) == nullptr;
+  bool rv = loadRadioSettingsYaml(checks) == nullptr;
+#if LCD_W == 128
+  lcdSetInvert(g_eeGeneral.invertLCD);
+#endif
+  return rv;
 }

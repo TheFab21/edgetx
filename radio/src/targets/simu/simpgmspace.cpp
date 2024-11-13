@@ -19,21 +19,26 @@
  * GNU General Public License for more details.
  */
 
+#include "board.h"
 #define SIMPGMSPC_USE_QT    0
 
 #if defined(SIMU_AUDIO)
   #include <SDL.h>
 #endif
 
-#include "opentx.h"
+#include "edgetx.h"
 #include "simulcd.h"
 
 #include "hal/adc_driver.h"
 #include "hal/rotary_encoder.h"
+#include "hal/usb_driver.h"
 
 #include <errno.h>
 #include <stdarg.h>
 #include <string>
+#ifdef SIMU_COM_PORT
+  #include "rs232.h"
+#endif
 
 #if !defined (_MSC_VER) || defined (__GNUC__)
   #include <chrono>
@@ -42,7 +47,8 @@
 
 int g_snapshot_idx = 0;
 
-uint8_t simu_start_mode = 0;
+extern uint8_t startOptions;
+
 char * main_thread_error = nullptr;
 
 bool simu_shutdown = false;
@@ -57,15 +63,11 @@ rotenc_t rotaryEncoderGetValue()
   return rotencValue / ROTARY_ENCODER_GRANULARITY;
 }
 
-rotenc_t rotaryEncoderGetRawValue() { return rotencValue; }
-
 // TODO: remove all STM32 defs
 
 extern const etx_hal_adc_driver_t simu_adc_driver;
 
 void lcdCopy(void * dest, void * src);
-
-FATFS g_FATFS_Obj;
 
 uint64_t simuTimerMicros(void)
 {
@@ -110,10 +112,9 @@ uint16_t getTmr2MHz()
   return simuTimerMicros() * 2;
 }
 
-// return 2ms resolution to match CoOS settings
-uint64_t CoGetOSTime(void)
+uint32_t timersGetMsTick(void)
 {
-  return simuTimerMicros() / 2000;
+  return simuTimerMicros() / 1000;
 }
 
 void simuInit()
@@ -160,7 +161,7 @@ void simuStart(bool tests, const char * sdPath, const char * settingsPath)
   menuLevel = 0;
 #endif
 
-  simu_start_mode = (tests ? 0 : OPENTX_START_NO_SPLASH | OPENTX_START_NO_CALIBRATION | OPENTX_START_NO_CHECKS);
+  startOptions = (tests ? 0 : OPENTX_START_NO_SPLASH | OPENTX_START_NO_CALIBRATION | OPENTX_START_NO_CHECKS);
   simu_shutdown = false;
 
   simuFatfsSetPaths(sdPath, settingsPath);
@@ -423,6 +424,12 @@ void lcdSetRefVolt(uint8_t val)
 }
 #endif
 
+#if LCD_W == 128
+void lcdSetInvert(bool invert)
+{
+}
+#endif
+
 void boardInit()
 {
 }
@@ -449,9 +456,9 @@ void SET_POWER_REASON(uint32_t value) {}
 #if defined(TRIMS_EMULATE_BUTTONS)
 bool trimsAsButtons = false;
 
-void setTrimsAsButtons(bool val) { trimsAsButtons = val; }
+void setHatsAsKeys(bool val) { trimsAsButtons = val; }
 
-bool getTrimsAsButtons()
+bool getHatsAsKeys()
 {
   bool lua = false;
 #if defined(LUA)
@@ -477,21 +484,16 @@ uint32_t readKeys()
 
 uint32_t readTrims()
 {
-  uint32_t result = 0;
+  uint32_t trims = 0;
 
   for (int i = 0; i < keysGetMaxTrims() * 2; i++) {
     if (trimsStates[i]) {
       // TRACE("trim pressed %d", i);
-      result |= 1 << i;
+      trims |= 1 << i;
     }
   }
 
-#if defined(PCBXLITE)
-  if (keysStates[KEY_SHIFT])
-    result = ((result & 0x03) << 6) | ((result & 0x0c) << 2);
-#endif
-
-  return result;
+  return trims;
 }
 
 int usbPlugged() { return false; }
@@ -535,7 +537,7 @@ void boardOff()
 
 void hapticOff() {}
 
-#if defined(PCBFRSKY) || defined(PCBFLYSKY)
+#if defined(PCBFRSKY) || defined(PCBNV14)
 HardwareOptions hardwareOptions;
 #endif
 
@@ -588,16 +590,56 @@ void rtcSetTime(const struct gtm * t)
 {
 }
 
+#if defined(PCBTARANIS)
+void sdPoll10ms() {}
+#endif
+
+uint32_t SD_GetCardType() { return 0; }
+
 #if defined(USB_SERIAL)
 const etx_serial_port_t UsbSerialPort = { "USB-VCP", nullptr, nullptr };
 #endif
 
 #if defined(AUX_SERIAL) || defined(AUX2_SERIAL)
-static void* _fake_drv_init(void*, const etx_serial_init*) { return (void*)1; }
-static void _fake_drv_fct1(void*) {}
-static void _fake_drv_send_byte(void*, uint8_t) {}
-static void _fake_drv_send_buffer(void*, const uint8_t*, uint32_t) {}
-static int _fake_drv_get_byte(void*, uint8_t*) { return 0; }
+static void* _fake_drv_init(void* n, const etx_serial_init* dev) {
+#ifdef SIMU_COM_PORT
+  static bool init = false;
+  if (!init) {
+    comEnumerate();
+    init=true;
+  }
+  comOpen(SIMU_COM_PORT, dev->baudrate);
+#endif
+  return (void*)1;
+  }
+static void _fake_drv_fct1(void*) {
+#ifdef SIMU_COM_PORT
+  comClose(SIMU_COM_PORT);
+#endif
+}
+static void _fake_drv_send_byte(void*, uint8_t b) {
+#ifdef SIMU_COM_PORT
+  comWrite(SIMU_COM_PORT, (char*)&b, 1);
+#endif
+}
+static void _fake_drv_send_buffer(void*, const uint8_t* b, uint32_t l) {
+#ifdef SIMU_COM_PORT
+  comWrite(SIMU_COM_PORT, (char*)b, l);
+#endif
+}
+static int _fake_drv_get_byte(void*, uint8_t* b) {
+#ifdef SIMU_COM_PORT
+  return comRead(SIMU_COM_PORT, (char*)b, 1);
+#else
+  return 0;
+#endif
+  }
+static void _fake_drv_set_baudrate(void*, uint32_t baudrate) {
+#ifdef SIMU_COM_PORT
+  comClose(SIMU_COM_PORT);
+  comOpen(SIMU_COM_PORT, baudrate);
+#endif
+}
 static const etx_serial_driver_t _fake_drv = {
   .init = _fake_drv_init,
   .deinit = _fake_drv_fct1,
@@ -608,9 +650,11 @@ static const etx_serial_driver_t _fake_drv = {
   .enableRx = nullptr,
   .getByte = _fake_drv_get_byte,
   .getLastByte = nullptr,
+  .getBufferedBytes = nullptr,
+  .copyRxBuffer = nullptr,
   .clearRxBuffer = nullptr,
   .getBaudrate = nullptr,
-  .setBaudrate = nullptr,
+  .setBaudrate = _fake_drv_set_baudrate,
   .setPolarity = nullptr,
   .setHWOption = nullptr,
   .setReceiveCb = nullptr,

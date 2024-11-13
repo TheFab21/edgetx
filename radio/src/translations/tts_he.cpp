@@ -19,7 +19,7 @@
  * GNU General Public License for more details.
  */
 
-#include "opentx.h"
+#include "edgetx.h"
 
 enum HebrewPrompts {
   HE_PROMPT_NUMBERS_BASE = 0,
@@ -34,7 +34,7 @@ enum HebrewPrompts {
 };
 
 
-  #define HE_PUSH_UNIT_PROMPT(u, p) he_pushUnitPrompt((u), (p), id)
+#define HE_PUSH_UNIT_PROMPT(u, p) he_pushUnitPrompt((u), (p), id, fragmentVolume)
 
 I18N_PLAY_FUNCTION(he, pushUnitPrompt, uint8_t unitprompt, int16_t number)
 {

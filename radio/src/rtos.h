@@ -19,10 +19,10 @@
  * GNU General Public License for more details.
  */
 
-#ifndef _RTOS_H_
-#define _RTOS_H_
+#pragma once
 
-#include "definitions.h"
+#include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C++" {
@@ -65,9 +65,9 @@ extern "C++" {
     mutex = PTHREAD_MUTEX_INITIALIZER;
   }
 
-  static inline void RTOS_LOCK_MUTEX(pthread_mutex_t &mutex)
+  static inline bool RTOS_LOCK_MUTEX(pthread_mutex_t &mutex)
   {
-      pthread_mutex_lock(&mutex);
+      return pthread_mutex_lock(&mutex) == 0;
   }
 
   static inline bool RTOS_TRYLOCK_MUTEX(pthread_mutex_t &mutex)
@@ -114,15 +114,17 @@ extern "C++" {
 #endif
   }
 
-template<int SIZE>
-inline void RTOS_CREATE_TASK(pthread_t &taskId, void * (*task)(void *), const char * name, TaskStack<SIZE> &, unsigned size = 0, unsigned priority = 0)
+  template <int SIZE>
+  inline void RTOS_CREATE_TASK(pthread_t &taskId, void *(*task)(void *),
+                               const char *name, TaskStack<SIZE> &,
+                               unsigned size = 0, unsigned priority = 0)
   {
-    UNUSED(size);
-    UNUSED(priority);
+    (void)size;
+    (void)priority;
     RTOS_CREATE_TASK(taskId, task, name);
   }
 
-  #define TASK_RETURN()                 return nullptr
+#define TASK_RETURN()                 return nullptr
 
   constexpr uint32_t mainStackAvailable()
   {
@@ -194,7 +196,7 @@ inline void RTOS_CREATE_TASK(pthread_t &taskId, void * (*task)(void *), const ch
                                        UBaseType_t uxPriority)
   {
     h->rtos_handle = xTaskCreateStatic(
-        pxTaskCode, name, ulStackDepth, 0, uxPriority,
+        pxTaskCode, name, ulStackDepth, NULL, uxPriority,
         puxStackBuffer, &h->task_struct);
   }
 
@@ -203,7 +205,7 @@ inline void RTOS_CREATE_TASK(pthread_t &taskId, void * (*task)(void *), const ch
   
   static inline void _RTOS_CREATE_MUTEX(RTOS_MUTEX_HANDLE* h)
   {
-    h->rtos_handle = xSemaphoreCreateBinaryStatic(&h->mutex_struct);
+    h->rtos_handle = xSemaphoreCreateMutexStatic(&h->mutex_struct);
     xSemaphoreGive(h->rtos_handle);
   }
 
@@ -322,5 +324,3 @@ inline void RTOS_CREATE_TASK(pthread_t &taskId, void * (*task)(void *), const ch
 #ifdef __cplusplus
 }
 #endif
-
-#endif // _RTOS_H_

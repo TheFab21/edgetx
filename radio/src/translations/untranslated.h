@@ -65,14 +65,20 @@
     "R9MLP ACCESS",                  \
     "SBUS",                          \
     "XJT Lite",                      \
-    "FLYSKY",                        \
+    "AFHDS2A",                       \
+    "AFHDS3",                        \
     TR("Lemon DSMP","LemonRx DSMP")
 
-#define TR_FLYSKY_PROTOCOLS            "AFHDS3","AFHDS2A"
 #define TR_XJT_ACCST_RF_PROTOCOLS      "D16","D8","LR12"
 #define TR_ISRM_RF_PROTOCOLS           "ACCESS","D16","LR12"
 
-#define TR_SPORT_MODES                 "S.PORT","F.PORT","FBUS(FPORT2)"
+// ACCESS STUFF
+#define STR_SBUSIN                     "SBUS in"
+#define STR_SBUSOUT                    "SBUS out"
+#define STR_SPORT                      "S.PORT"
+#define STR_FBUS                       "FBUS"
+#define STR_SBUS24                     "SBUS24"
+#define TR_SPORT_MODES                 STR_SPORT,"F.PORT",STR_FBUS
 #define TR_R9M_PXX2_RF_PROTOCOLS       "ACCESS","FCC","EU","Flex"
 #define TR_R9M_REGION                  "FCC","EU","868MHz","915MHz"
 #define TR_R9M_LITE_FCC_POWER_VALUES   "(100mW)"
@@ -85,7 +91,8 @@
 
 #define TR_MULTI_PROTOCOLS             PROTO_NAMES
 #define TR_MULTI_BAYANG_OPTIONS        BAYANG_OPTION_TELEMETRY_NAMES
-#define TR_MULTI_DSM_OPTIONS           DSM2_OPTION_SERVOFREQ_NAMES 
+#define TR_MULTI_DSM_OPTIONS           DSM2_OPTION_SERVOFREQ_NAMES
+#define TR_MULTI_DSM_CLONE             DSM_CLONE_NAMES
 
 #define TR_MULTI_POWER                 "1.6mW","2.0mW","2.5mW","3.2mW","4.0mW","5.0mW","6.3mW","7.9mW","10mW","13mW","16mW","20mW","25mW","32mW","40mW","50mW"
 #define TR_MULTI_WBUS_MODE             "WBUS","PPM"
@@ -95,7 +102,7 @@
 #define TR_FLYSKY_PULSE_PROTO          "PWM","PPM"
 #define TR_FLYSKY_SERIAL_PROTO         "iBUS","SBUS"
 #define TR_PPM_POL                     "-","+"
-#define TR_PWR_OFF_DELAYS              "0s","1s","2s","4s"
+#define TR_PWR_OFF_DELAYS              "0s","0.5s","1s","2s","3s"
 #if defined(COLORLCD)
 #define TR_SPLASHSCREEN_DELAYS         "1s","2s","3s","4s","6s","8s","10s","15s"
 #endif
@@ -307,6 +314,11 @@
 #define STR_CHAR_BW_DEGREE       '@'
 
 #define TR_FSGROUPS                     "-","1","2","3"
+#if defined(COLORLCD)
+#define TR_FSSWITCHES                   TR_LAST, "SW1", "SW2", "SW3", "SW4", "SW5", "SW6", TR_OFF
+#else
+#define TR_FSSWITCHES                   "=", "SW1", "SW2", "SW3", "SW4", "SW5", "SW6", TR_OFF
+#endif
 
 //
 // HoTT Telemetry sensor names by Hott device

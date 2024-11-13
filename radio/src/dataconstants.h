@@ -19,8 +19,9 @@
  * GNU General Public License for more details.
  */
 
-#ifndef _DATACONSTANTS_H_
-#define _DATACONSTANTS_H_
+#pragma once
+
+#if !defined(CFN_ONLY)
 
 #include "board.h"
 #include "storage/yaml/yaml_defs.h"
@@ -39,7 +40,7 @@
 #define LABELS_LENGTH 100 // Maximum length of the label string
 #define LABEL_LENGTH 16
 
-#if defined(PCBHORUS) || defined(PCBNV14)
+#if defined(COLORLCD) || defined(STM32H747xx)
   #define MAX_MODELS                   60
   #define MAX_OUTPUT_CHANNELS          32 // number of real output channels CH1-CH32
   #define MAX_FLIGHT_MODES             9
@@ -98,7 +99,7 @@ enum CurveType {
 #define MIN_POINTS_PER_CURVE           3
 #define MAX_POINTS_PER_CURVE           17
 
-#if defined(PCBHORUS) || defined(PCBNV14)
+#if defined(COLORLCD)
   #define LEN_MODEL_NAME               15
   #define LEN_TIMER_NAME               8
   #define LEN_FLIGHT_MODE_NAME         10
@@ -107,7 +108,7 @@ enum CurveType {
   #define LEN_CHANNEL_NAME             6
   #define LEN_INPUT_NAME               4
   #define LEN_CURVE_NAME               3
-  #define LEN_FUNCTION_NAME            6
+  #define LEN_FUNCTION_NAME            8
   #define MAX_CURVES                   32
   #define MAX_CURVE_POINTS             512
 #elif LCD_W == 212
@@ -126,11 +127,12 @@ enum CurveType {
   #define LEN_MODEL_NAME               10
   #define LEN_TIMER_NAME               3
   #define LEN_FLIGHT_MODE_NAME         6
+  #define LEN_BITMAP_NAME              0
   #define LEN_EXPOMIX_NAME             6
   #define LEN_CHANNEL_NAME             4
   #define LEN_INPUT_NAME               3
   #define LEN_CURVE_NAME               3
-  #define LEN_FUNCTION_NAME            6
+  #define LEN_FUNCTION_NAME            8
   #define MAX_CURVES                   32
   #define MAX_CURVE_POINTS             512
 #endif
@@ -392,23 +394,26 @@ enum PotsWarnMode {
 
 #if defined(COLORLCD)
   #define MAX_POTS        16
-  #define MAX_AXIS        2
 #else
   #define MAX_POTS        8
-  #define MAX_AXIS        0
 #endif
 
 #define MAX_VBAT          1
 #define MAX_RTC_BAT       1
 
-#define MAX_ANALOG_INPUTS (MAX_STICKS + MAX_POTS + MAX_AXIS + MAX_VBAT + MAX_RTC_BAT)
-#define MAX_CALIB_ANALOG_INPUTS (MAX_STICKS + MAX_POTS + MAX_AXIS)
+#define MAX_ANALOG_INPUTS (MAX_STICKS + MAX_POTS + MAX_VBAT + MAX_RTC_BAT)
+#define MAX_CALIB_ANALOG_INPUTS (MAX_STICKS + MAX_POTS)
 
 #define MAX_SWITCHES      20
-#if defined(RADIO_T20)
-#define MAX_TRIMS         8
+
+#if !defined(MAX_FLEX_SWITCHES)
+#define MAX_FLEX_SWITCHES 0
+#endif
+
+#if NUM_TRIMS > 6
+#define MAX_TRIMS 8
 #else
-#define MAX_TRIMS         6
+#define MAX_TRIMS 6
 #endif
 
 #define MAX_XPOTS_POSITIONS (MAX_POTS * XPOTS_MULTIPOS_COUNT)
@@ -441,6 +446,8 @@ enum SwitchSources {
 
   SWSRC_RADIO_ACTIVITY,
 
+  SWSRC_TRAINER_CONNECTED,
+
 #if defined(DEBUG_LATENCY)
   SWSRC_LATENCY_TOGGLE,
 #endif
@@ -470,7 +477,8 @@ enum MixSources {
 
 #if defined(LUA_INPUTS)
   MIXSRC_FIRST_LUA SKIP,
-  MIXSRC_LAST_LUA SKIP = MIXSRC_FIRST_LUA + (MAX_SCRIPTS * MAX_SCRIPT_OUTPUTS) - 1,
+  MIXSRC_LAST_LUA SKIP =
+      MIXSRC_FIRST_LUA + (MAX_SCRIPTS * MAX_SCRIPT_OUTPUTS) - 1,
 #endif
 
   // Semantic sticks
@@ -479,11 +487,6 @@ enum MixSources {
 
   MIXSRC_FIRST_POT SKIP,
   MIXSRC_LAST_POT SKIP = MIXSRC_FIRST_POT + MAX_POTS - 1,
-
-#if MAX_AXIS > 0
-  MIXSRC_FIRST_AXIS SKIP,
-  MIXSRC_LAST_AXIS SKIP = MIXSRC_FIRST_AXIS + MAX_AXIS - 1,
-#endif
 
 #if defined(IMU)
   MIXSRC_TILT_X,
@@ -501,27 +504,22 @@ enum MixSources {
   MIXSRC_LAST_SPACEMOUSE SKIP = MIXSRC_SPACEMOUSE_F,
 #endif
 
+  MIXSRC_MIN,
   MIXSRC_MAX,
 
   MIXSRC_FIRST_HELI SKIP,
   MIXSRC_LAST_HELI SKIP = MIXSRC_FIRST_HELI + 2,
 
   MIXSRC_FIRST_TRIM SKIP,
-  MIXSRC_TrimRud = MIXSRC_FIRST_TRIM,
-  MIXSRC_TrimEle,
-  MIXSRC_TrimThr,
-  MIXSRC_TrimAil,
-  //#if defined(PCBHORUS)
-  MIXSRC_TrimT5,
-  MIXSRC_TrimT6,
-  MIXSRC_LAST_TRIM SKIP = MIXSRC_TrimT6,
-  //#else
-  //MIXSRC_LAST_TRIM SKIP = MIXSRC_TrimAil,
-  //#endif
+  MIXSRC_LAST_TRIM SKIP = MIXSRC_FIRST_TRIM + MAX_TRIMS - 1,
 
   MIXSRC_FIRST_SWITCH SKIP,
   MIXSRC_LAST_SWITCH SKIP = MIXSRC_FIRST_SWITCH + MAX_SWITCHES - 1,
 
+#if defined(FUNCTION_SWITCHES)
+  MIXSRC_FIRST_CUSTOMSWITCH_GROUP SKIP,
+  MIXSRC_LAST_CUSTOMSWITCH_GROUP SKIP = MIXSRC_FIRST_CUSTOMSWITCH_GROUP + NUM_FUNCTIONS_GROUPS - 1,
+#endif
   MIXSRC_FIRST_LOGICAL_SWITCH SKIP,
   MIXSRC_LAST_LOGICAL_SWITCH SKIP = MIXSRC_FIRST_LOGICAL_SWITCH + MAX_LOGICAL_SWITCHES - 1,
 
@@ -543,15 +541,14 @@ enum MixSources {
 
   MIXSRC_FIRST_TELEM SKIP,
   MIXSRC_LAST_TELEM SKIP = MIXSRC_FIRST_TELEM + 3 * MAX_TELEMETRY_SENSORS - 1,
+
+  MIXSRC_INVERT SKIP,
+  MIXSRC_VALUE SKIP,  // Special case to trigger source as value conversion
 };
 
-
-#define MIXSRC_LAST                 MIXSRC_LAST_CH
+#define MIXSRC_LAST                 MIXSRC_LAST_GVAR
 #define INPUTSRC_FIRST              MIXSRC_FIRST_STICK
 #define INPUTSRC_LAST               MIXSRC_LAST_TELEM
-
-// TODO: this won't work forever (what about ground radios?)
-#define MIXSRC_Thr                  (MIXSRC_FIRST_STICK + 2)
 
 #if defined(FUNCTION_SWITCHES)
 #define MIXSRC_LAST_REGULAR_SWITCH  (MIXSRC_FIRST_SWITCH + switchGetMaxSwitches() - 1)
@@ -564,42 +561,6 @@ enum BacklightMode {
   e_backlight_mode_sticks = 2,
   e_backlight_mode_all = e_backlight_mode_keys+e_backlight_mode_sticks,
   e_backlight_mode_on
-};
-
-enum Functions {
-  // first the functions which need a checkbox
-  FUNC_OVERRIDE_CHANNEL,
-  FUNC_TRAINER,
-  FUNC_INSTANT_TRIM,
-  FUNC_RESET,
-  FUNC_SET_TIMER,
-  FUNC_ADJUST_GVAR,
-  FUNC_VOLUME,
-  FUNC_SET_FAILSAFE,
-  FUNC_RANGECHECK,
-  FUNC_BIND,
-  // then the other functions
-  FUNC_FIRST_WITHOUT_ENABLE SKIP,
-  FUNC_PLAY_SOUND = FUNC_FIRST_WITHOUT_ENABLE,
-  FUNC_PLAY_TRACK,
-  FUNC_PLAY_VALUE,
-  FUNC_PLAY_SCRIPT,
-  FUNC_BACKGND_MUSIC,
-  FUNC_BACKGND_MUSIC_PAUSE,
-  FUNC_VARIO,
-  FUNC_HAPTIC,
-  FUNC_LOGS,
-  FUNC_BACKLIGHT,
-  FUNC_SCREENSHOT,
-  FUNC_RACING_MODE,
-#if defined(COLORLCD)
-  FUNC_DISABLE_TOUCH,
-  FUNC_SET_SCREEN,
-#endif
-#if defined(DEBUG)
-  FUNC_TEST,  // should remain the last before MAX as not added in Companion
-#endif
-  FUNC_MAX SKIP
 };
 
 enum TimerModes {
@@ -632,6 +593,7 @@ enum ResetFunctionParam {
   FUNC_RESET_TIMER3,
   FUNC_RESET_FLIGHT,
   FUNC_RESET_TELEMETRY,
+  FUNC_RESET_TRIMS,
   FUNC_RESET_PARAM_FIRST_TELEM,
   FUNC_RESET_PARAM_LAST_TELEM = FUNC_RESET_PARAM_FIRST_TELEM + MAX_TELEMETRY_SENSORS,
   FUNC_RESET_PARAMS_COUNT SKIP,
@@ -641,6 +603,7 @@ enum ResetFunctionParam {
 enum AdjustGvarFunctionParam {
   FUNC_ADJUST_GVAR_CONSTANT,
   FUNC_ADJUST_GVAR_SOURCE,
+  FUNC_ADJUST_GVAR_SOURCERAW,
   FUNC_ADJUST_GVAR_GVAR,
   FUNC_ADJUST_GVAR_INCDEC,
 };
@@ -654,6 +617,13 @@ enum BluetoothModes {
 #else
   BLUETOOTH_MAX SKIP = BLUETOOTH_TRAINER
 #endif
+};
+
+enum HatsMode {
+  HATSMODE_TRIMS_ONLY,
+  HATSMODE_KEYS_ONLY,
+  HATSMODE_SWITCHABLE,
+  HATSMODE_GLOBAL
 };
 
 enum UartSampleModes {
@@ -677,4 +647,54 @@ enum ModelOverridableEnable {
 
 #define SELECTED_THEME_NAME_LEN 26
 
-#endif // _DATACONSTANTS_H_
+// PPM Units
+enum PPMUnit {
+    PPM_PERCENT_PREC0,
+    PPM_PERCENT_PREC1,
+    PPM_US
+};
+
+#endif
+
+enum Functions {
+  FUNC_OVERRIDE_CHANNEL,
+  FUNC_TRAINER,
+  FUNC_INSTANT_TRIM,
+  FUNC_RESET,
+  FUNC_SET_TIMER,
+  FUNC_ADJUST_GVAR,
+  FUNC_VOLUME,
+  FUNC_SET_FAILSAFE,
+  FUNC_RANGECHECK,
+  FUNC_BIND,
+  FUNC_PLAY_SOUND,
+  FUNC_PLAY_TRACK,
+  FUNC_PLAY_VALUE,
+  FUNC_PLAY_SCRIPT,
+  FUNC_BACKGND_MUSIC,
+  FUNC_BACKGND_MUSIC_PAUSE,
+  FUNC_VARIO,
+  FUNC_HAPTIC,
+  FUNC_LOGS,
+  FUNC_BACKLIGHT,
+  FUNC_SCREENSHOT,
+  FUNC_RACING_MODE,
+#if defined(COLORLCD) || defined(CFN_ONLY)
+  FUNC_DISABLE_TOUCH,
+#endif
+  FUNC_SET_SCREEN,
+  FUNC_DISABLE_AUDIO_AMP,
+  FUNC_RGB_LED,
+#if defined(VIDEO_SWITCH) || defined(CFN_ONLY)
+  FUNC_LCD_TO_VIDEO,
+#endif
+#if defined(FUNCTION_SWITCHES) || defined(CFN_ONLY)
+  FUNC_PUSH_CUST_SWITCH,
+#endif
+  FUNC_TEST, // MUST remain last
+#if defined(DEBUG)
+  FUNC_MAX SKIP
+#else
+  FUNC_MAX SKIP = FUNC_TEST
+#endif
+};

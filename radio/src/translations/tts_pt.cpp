@@ -19,7 +19,7 @@
  * GNU General Public License for more details.
  */
 
-#include "opentx.h"
+#include "edgetx.h"
 
 enum PortuguesePrompts {
   PT_PROMPT_NUMBERS_BASE = 0,
@@ -67,7 +67,7 @@ enum PortuguesePrompts {
 };
 
 
-  #define PT_PUSH_UNIT_PROMPT(u) pt_pushUnitPrompt((u), id)
+#define PT_PUSH_UNIT_PROMPT(u) pt_pushUnitPrompt((u), id, fragmentVolume)
 
 I18N_PLAY_FUNCTION(pt, pushUnitPrompt, uint8_t unitprompt)
 {

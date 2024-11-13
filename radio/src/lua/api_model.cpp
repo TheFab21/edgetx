@@ -23,15 +23,14 @@
 
 #include <ctype.h>
 #include <stdio.h>
-#include "opentx.h"
+#include "edgetx.h"
 #include "lua_api.h"
 #include "../timers.h"
 #include "model_init.h"
 #include "gvars.h"
+#include "mixes.h"
 
-#if defined(SDCARD_YAML)
 #include <storage/sdcard_yaml.h>
-#endif
 
 #if defined(MULTIMODULE)
 #include "pulses/multi.h"
@@ -96,9 +95,6 @@ static int luaModelSetInfo(lua_State *L)
     if (!strcmp(key, "name")) {
       const char * name = luaL_checkstring(L, -1);
       strncpy(g_model.header.name, name, sizeof(g_model.header.name));
-#if defined(EEPROM)
-      memcpy(modelHeaders[g_eeGeneral.currModel].name, g_model.header.name, sizeof(g_model.header.name));
-#endif
     }
     else if (!strcmp(key, "extendedLimits")) {
       g_model.extendedLimits = lua_toboolean(L, -1);
@@ -111,7 +107,7 @@ static int luaModelSetInfo(lua_State *L)
 #if LCD_DEPTH > 1
     else if (!strcmp(key, "bitmap")) {
       const char * name = luaL_checkstring(L, -1);
-      strncpy(g_model.header.bitmap, name, sizeof(g_model.header.bitmap));
+      strncpy(g_model.header.bitmap, name, LEN_BITMAP_NAME);
     }
 #endif
   }
@@ -237,9 +233,6 @@ static int luaModelSetModule(lua_State *L)
       }
       else if (!strcmp(key, "modelId")) {
         g_model.header.modelId[idx] = luaL_checkinteger(L, -1);
-#if defined(EEPROM)
-        modelHeaders[g_eeGeneral.currModel].modelId[idx] = g_model.header.modelId[idx];
-#endif
       }
       else if (!strcmp(key, "firstChannel")) {
         module.channelsStart = luaL_checkinteger(L, -1);
@@ -554,9 +547,9 @@ static int luaModelSetFlightMode(lua_State * L)
         if (idx < 0 || idx >= max_trims) continue;
         int16_t val = luaL_checkinteger(L, -1);
         if (g_model.extendedTrims)
-          val = limit<int16_t>(val, TRIM_EXTENDED_MIN, TRIM_EXTENDED_MAX);
+          val = limit<int16_t>(TRIM_EXTENDED_MIN, val, TRIM_EXTENDED_MAX);
         else
-          val = limit<int16_t>(val, TRIM_MIN, TRIM_MAX);
+          val = limit<int16_t>(TRIM_MIN, val, TRIM_MAX);
         if (idx < max_trims)
           fm->trim[idx].value = val;
       }
@@ -592,6 +585,7 @@ Return input data for given input and line number
  * `name` (string) input line name
  * `inputName` (string) input input name
  * `source` (number) input source index
+ * `scale` (number)  input scaling (for telemetry)
  * `weight` (number) input weight
  * `offset` (number) input offset
  * `switch` (number) input switch index
@@ -601,7 +595,7 @@ Return input data for given input and line number
  * 'trimSource' (number) a positive number representing trim source
  * 'flightModes' (number) bit-mask of active flight modes
 
-@status current Introduced in 2.0.0, curveType/curveValue/carryTrim added in 2.3, inputName added 2.3.10, flighmode reworked in 2.3.11, broken carryTrim replaced by trimSource in 2.8.1
+@status current Introduced in 2.0.0, curveType/curveValue/carryTrim added in 2.3, inputName added 2.3.10, flighmode reworked in 2.3.11, broken carryTrim replaced by trimSource in 2.8.1, scale added in 2.10
 */
 static int luaModelGetInput(lua_State *L)
 {
@@ -615,6 +609,7 @@ static int luaModelGetInput(lua_State *L)
     lua_pushtablenstring(L, "name", expo->name);
     lua_pushtablenstring(L, "inputName", g_model.inputNames[chn]);
     lua_pushtableinteger(L, "source", expo->srcRaw);
+    lua_pushtableinteger(L, "scale", expo->scale);
     lua_pushtableinteger(L, "weight", expo->weight);
     lua_pushtableinteger(L, "offset", expo->offset);
     lua_pushtableinteger(L, "switch", expo->swtch);
@@ -640,7 +635,7 @@ Insert an Input at specified line
 
 @param value (table) input data, see model.getInput()
 
-@status current Introduced in 2.0.0, curveType/curveValue/carryTrim added in 2.3, inputName added 2.3.10, broken carryTrim replaced by trimSource in EdgeTX 2.8.1
+@status current Introduced in 2.0.0, curveType/curveValue/carryTrim added in 2.3, inputName added 2.3.10, broken carryTrim replaced by trimSource in EdgeTX 2.8.1, scale added in 2.10
 */
 static int luaModelInsertInput(lua_State *L)
 {
@@ -674,11 +669,22 @@ static int luaModelInsertInput(lua_State *L)
       else if (!strcmp(key, "source")) {
         expo->srcRaw = luaL_checkinteger(L, -1);
       }
+      else if (!strcmp(key, "scale")) {
+        expo->scale = luaL_checkinteger(L, -1);
+      }
       else if (!strcmp(key, "weight")) {
-        expo->weight = luaL_checkinteger(L, -1);
+        int val = luaL_checkinteger(L, -1);
+        SourceNumVal v;
+        v.isSource = (abs(val) >= 1024);
+        v.value = val;
+        expo->weight = v.rawValue;
       }
       else if (!strcmp(key, "offset")) {
-        expo->offset = luaL_checkinteger(L, -1);
+        int val = luaL_checkinteger(L, -1);
+        SourceNumVal v;
+        v.isSource = (abs(val) >= 1024);
+        v.value = val;
+        expo->offset = v.rawValue;
       }
       else if (!strcmp(key, "switch")) {
         expo->swtch = luaL_checkinteger(L, -1);
@@ -687,7 +693,11 @@ static int luaModelInsertInput(lua_State *L)
         expo->curve.type = luaL_checkinteger(L, -1);
       }
       else if (!strcmp(key, "curveValue")) {
-        expo->curve.value = luaL_checkinteger(L, -1);
+        int val = luaL_checkinteger(L, -1);
+        SourceNumVal v;
+        v.isSource = (abs(val) >= 1024);
+        v.value = val;
+        expo->curve.value = v.rawValue;
       }
       else if (!strcmp(key, "trimSource")) {
         expo->trimSource = - luaL_checkinteger(L, -1);
@@ -882,10 +892,9 @@ static int luaModelInsertMix(lua_State *L)
   unsigned int first = getFirstMix(chn);
   unsigned int count = getMixesCountFromFirst(chn, first);
 
-  if (chn<MAX_OUTPUT_CHANNELS && getMixesCount()<MAX_MIXERS && idx<=count) {
+  if (chn<MAX_OUTPUT_CHANNELS && getMixCount()<MAX_MIXERS && idx<=count) {
     idx += first;
-    s_currCh = chn+1;
-    insertMix(idx);
+    insertMix(idx, chn);
     MixData *mix = mixAddress(idx);
     luaL_checktype(L, -1, LUA_TTABLE);
     for (lua_pushnil(L); lua_next(L, -2); lua_pop(L, 1)) {
@@ -899,10 +908,18 @@ static int luaModelInsertMix(lua_State *L)
         mix->srcRaw = luaL_checkinteger(L, -1);
       }
       else if (!strcmp(key, "weight")) {
-        mix->weight = luaL_checkinteger(L, -1);
+        int val = luaL_checkinteger(L, -1);
+        SourceNumVal v;
+        v.isSource = (abs(val) >= 1024);
+        v.value = val;
+        mix->weight = v.rawValue;
       }
       else if (!strcmp(key, "offset")) {
-        mix->offset = luaL_checkinteger(L, -1);
+        int val = luaL_checkinteger(L, -1);
+        SourceNumVal v;
+        v.isSource = (abs(val) >= 1024);
+        v.value = val;
+        mix->offset = v.rawValue;
       }
       else if (!strcmp(key, "switch")) {
         mix->swtch = luaL_checkinteger(L, -1);
@@ -911,7 +928,11 @@ static int luaModelInsertMix(lua_State *L)
         mix->curve.type = luaL_checkinteger(L, -1);
       }
       else if (!strcmp(key, "curveValue")) {
-        mix->curve.value = luaL_checkinteger(L, -1);
+        int val = luaL_checkinteger(L, -1);
+        SourceNumVal v;
+        v.isSource = (abs(val) >= 1024);
+        v.value = val;
+        mix->curve.value = v.rawValue;
       }
       else if (!strcmp(key, "multiplex")) {
         mix->mltpx = luaL_checkinteger(L, -1);
@@ -1355,6 +1376,7 @@ Get Custom Function parameters
  * `mode` (number) mode (only returned only returned if action is **not** play track, sound or script)
  * `param` (number) parameter (only returned only returned if action is **not** play track, sound or script)
  * `active` (number) 0 = disabled, 1 = enabled
+ * `repetition` (number) -1 to 60, range and meaning depend on function
 
 @status current Introduced in 2.0.0, TODO rename function
 */
@@ -1366,7 +1388,7 @@ static int luaModelGetCustomFunction(lua_State *L)
     lua_newtable(L);
     lua_pushtableinteger(L, "switch", CFN_SWITCH(cfn));
     lua_pushtableinteger(L, "func", CFN_FUNC(cfn));
-    if (CFN_FUNC(cfn) == FUNC_PLAY_TRACK || CFN_FUNC(cfn) == FUNC_BACKGND_MUSIC || CFN_FUNC(cfn) == FUNC_PLAY_SCRIPT) {
+    if (CFN_FUNC(cfn) == FUNC_PLAY_TRACK || CFN_FUNC(cfn) == FUNC_BACKGND_MUSIC || CFN_FUNC(cfn) == FUNC_PLAY_SCRIPT || CFN_FUNC(cfn) == FUNC_RGB_LED) {
       lua_pushtablenstring(L, "name", cfn->play.name);
     }
     else {
@@ -1375,6 +1397,7 @@ static int luaModelGetCustomFunction(lua_State *L)
       lua_pushtableinteger(L, "param", cfn->all.param);
     }
     lua_pushtableinteger(L, "active", CFN_ACTIVE(cfn));
+    lua_pushtableinteger(L, "repetition", cfn->repeat);
   }
   else {
     lua_pushnil(L);
@@ -1427,6 +1450,9 @@ static int luaModelSetCustomFunction(lua_State *L)
       }
       else if (!strcmp(key, "active")) {
         CFN_ACTIVE(cfn) = luaL_checkinteger(L, -1);
+      }
+      else if (!strcmp(key, "repetition")) {
+        cfn->repeat = luaL_checkinteger(L, -1);
       }
     }
     storageDirty(EE_MODEL);

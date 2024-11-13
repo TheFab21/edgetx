@@ -1,7 +1,8 @@
 /*
- * Copyright (C) OpenTX
+ * Copyright (C) EdgeTX
  *
  * Based on code named
+ *   opentx - https://github.com/opentx/opentx
  *   th9x - http://code.google.com/p/th9x
  *   er9x - http://code.google.com/p/er9x
  *   gruvin9x - http://code.google.com/p/gruvin9x
@@ -349,13 +350,9 @@ void MainWindow::openDocURL()
   QDesktopServices::openUrl(QUrl(link));
 }
 
-void MainWindow::openFile(const QString & fileName, bool updateLastUsedDir)
+void MainWindow::openFile(const QString & fileName)
 {
   if (!fileName.isEmpty()) {
-    if (updateLastUsedDir) {
-      g.eepromDir(QFileInfo(fileName).dir().absolutePath());
-    }
-
     QMdiSubWindow *existing = findMdiChild(fileName);
     if (existing) {
       mdiArea->setActiveSubWindow(existing);
@@ -413,7 +410,7 @@ void MainWindow::openRecentFile()
   QAction *action = qobject_cast<QAction *>(sender());
   if (action) {
     QString fileName = action->data().toString();
-    openFile(fileName, false);
+    openFile(fileName);
   }
 }
 
@@ -668,8 +665,7 @@ void MainWindow::about()
   aboutStr.append("<br/><br/>");
   aboutStr.append(tr("File new <a href='%1'>Issue or Request</a>").arg("https://github.com/EdgeTX/edgetx/issues/new/choose"));
   aboutStr.append("<br/><br/>");
-  aboutStr.append(tr("Copyright") + QString(" &copy; 2023 EdgeTX<br/>"));
-  // aboutStr.append(tr("Copyright") + QString(" &copy; 2021-%1 EdgeTX<br/>").arg(QString(__DATE__).right(4)));
+  aboutStr.append(tr("Copyright") + QString(" &copy; 2021-%1 EdgeTX<br/>").arg(BUILD_YEAR));
 
   QMessageBox msgBox(this);
   msgBox.setWindowIcon(CompanionIcon("information.png"));
@@ -1248,8 +1244,11 @@ void MainWindow::onChangeWindowAction(QAction * act)
 
 void MainWindow::onCurrentProfileChanged()
 {
+  g.moveCurrentProfileToTop();
   Firmware::setCurrentVariant(Firmware::getFirmwareForId(g.currentProfile().fwType()));
   emit firmwareChanged();
+  updateFactories->radioProfileChanged();
+  QApplication::clipboard()->clear();
   updateMenus();
 }
 
@@ -1258,8 +1257,10 @@ int MainWindow::newProfile(bool loadProfile)
   int i;
   for (i=0; i < MAX_PROFILES && g.profile[i].existsOnDisk(); i++)
     ;
-  if (i == MAX_PROFILES)  //Failed to find free slot
+  if (i == MAX_PROFILES) {  //Failed to find free slot
+    QMessageBox::warning(this, tr("Cannot add profile"), tr("There is no space left to add a new profile. Delete an exsting profile before adding a new one."));
     return -1;
+  }
 
   Firmware *newfw = Firmware::getDefaultVariant();
   g.profile[i].init();
@@ -1299,9 +1300,14 @@ void MainWindow::deleteProfile(const int pid)
     QMessageBox::warning(this, tr("Companion :: Open files warning"), tr("Please save or close modified file(s) before deleting the active profile."));
     return;
   }
+  int newPid = 0;
   if (pid == 0) {
-    QMessageBox::warning(this, tr("Not possible to remove profile"), tr("The default profile can not be removed."));
-    return;
+    // Find valid profile
+    for (newPid = 1; newPid < MAX_PROFILES && !g.profile[newPid].existsOnDisk(); newPid += 1);
+    if (newPid == MAX_PROFILES) {
+      QMessageBox::warning(this, tr("Not possible to remove profile"), tr("The default profile can not be removed."));
+      return;
+    }
   }
   int ret = QMessageBox::question(this,
                                   tr("Confirm Delete Profile"),
@@ -1310,7 +1316,8 @@ void MainWindow::deleteProfile(const int pid)
     return;
 
   g.getProfile(pid).resetAll();
-  loadProfileId(0);
+  loadProfileId(newPid);
+  g.moveCurrentProfileToTop();
 }
 
 void MainWindow::deleteCurrentProfile()

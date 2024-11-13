@@ -20,7 +20,7 @@
  */
 
 #include "opentxsimulator.h"
-#include "opentx.h"
+#include "edgetx.h"
 #include "simulcd.h"
 #include "switches.h"
 
@@ -51,7 +51,7 @@ QVector<QIODevice *> OpenTxSimulator::tracebackDevices;
 uint16_t simu_get_analog(uint8_t idx)
 {
   // 6POS simu mechanism use a different scale, so needs specific offset
-  if (IS_POT_MULTIPOS(idx - adcGetInputOffset(ADC_INPUT_POT))) {
+  if (IS_POT_MULTIPOS(idx - adcGetInputOffset(ADC_INPUT_FLEX))) {
     // Use radio calibration data to determine conversion factor
     StepsCalibData * calib = (StepsCalibData *) &g_eeGeneral.calib[idx];
     int range6POS = 2048; // Default if calibration is not valid
@@ -241,10 +241,9 @@ void OpenTxSimulator::setTrim(unsigned int idx, int value)
 
 void OpenTxSimulator::setTrainerInput(unsigned int inputNumber, int16_t value)
 {
-  static unsigned dim = DIM(ppmInput);
-  //setTrainerTimeout(100);
+  static unsigned dim = DIM(trainerInput);
   if (inputNumber < dim)
-    ppmInput[inputNumber] = qMin(qMax((int16_t)-512, value), (int16_t)512);
+    trainerInput[inputNumber] = qMin(qMax((int16_t)-512, value), (int16_t)512);
 }
 
 void OpenTxSimulator::setInputValue(int type, uint8_t index, int16_t value)
@@ -253,18 +252,9 @@ void OpenTxSimulator::setInputValue(int type, uint8_t index, int16_t value)
   switch (type) {
     case INPUT_SRC_ANALOG :
     case INPUT_SRC_STICK :
-      setAnalogValue(index, value);
-      break;
     case INPUT_SRC_KNOB :
-      setAnalogValue(index + adcGetInputOffset(ADC_INPUT_POT), value);
-      break;
     case INPUT_SRC_SLIDER :
-      // TODO redo this when Companion refactored to use radio json adc files
-      //setAnalogValue(index + adcGetInputOffset(ADC_INPUT_POT), value);
-      static const int slideroffset = adcGetInputIdx("SL1", 3);
-      //qDebug() << "SL1:" << slideroffset;
-      if (slideroffset >= 0)
-        setAnalogValue(index + slideroffset, value);
+      setAnalogValue(index, value);
       break;
     case INPUT_SRC_TXVIN :
       if (adcGetMaxInputs(ADC_INPUT_VBAT) > 0) {
@@ -298,10 +288,11 @@ extern volatile uint32_t rotencDt;
 
 void OpenTxSimulator::rotaryEncoderEvent(int steps)
 {
-#if defined(ROTARY_ENCODER_NAVIGATION)
+#if defined(ROTARY_ENCODER_NAVIGATION) && !defined(USE_HATS_AS_KEYS)
   static uint32_t last_tick = 0;
   if (steps != 0) {
-    if (g_eeGeneral.rotEncMode >= ROTARY_ENCODER_MODE_INVERT_BOTH) steps *= -1;
+    if (g_eeGeneral.rotEncMode == ROTARY_ENCODER_MODE_INVERT_BOTH)
+      steps *= -1;
     rotencValue += steps * ROTARY_ENCODER_GRANULARITY;
     // TODO: set rotencDt
     uint32_t now = RTOS_GET_MS();
@@ -411,15 +402,61 @@ void OpenTxSimulator::lcdFlushed()
 
 void OpenTxSimulator::setTrainerTimeout(uint16_t ms)
 {
-  ppmInputValidityTimer = ms;
+  trainerSetTimer(ms);
 }
 
-void OpenTxSimulator::sendTelemetry(const QByteArray data)
+void OpenTxSimulator::sendTelemetry(const uint8_t module, const uint8_t protocol, const QByteArray data)
 {
   //ETXS_DBG << data;
-  sportProcessTelemetryPacket(INTERNAL_MODULE,
-                              (uint8_t *)data.constData(),
-                              data.count());
+  switch (protocol) {
+  case SIMU_TELEMETRY_PROTOCOL_FRSKY_SPORT:
+    sportProcessTelemetryPacket(module,
+                                (uint8_t *)data.constData(),
+                                data.count());
+    break;
+  case SIMU_TELEMETRY_PROTOCOL_FRSKY_HUB:
+    frskyDProcessPacket(module,
+                        (uint8_t *)data.constData(),
+                        data.count());
+    break;
+  case SIMU_TELEMETRY_PROTOCOL_FRSKY_HUB_OOB:
+    // FrSky D telemetry is a stream which can span multiple
+    // packets. The telemetry parser _could_ be in the middle of a
+    // user packet when we want to inject telemetry, so we can't just
+    // call frskyDProcessPacket() with a USRPKT (at least not safely!)
+    // Instead we will bypass the telemetry stream parser and inject
+    // out of band into processHubPacket(). This way we also don't
+    // have to mess with byte stuffing and variable length packets.
+    //
+    // Note this doesn't take into account which module it's from, but
+    // that's how it works in the radio too if you have two frsky D
+    // modules running at once, so ¯\_(ツ)_/¯
+    {
+      uint8_t id = data[0];
+      uint16_t value = ((uint8_t)(data[2]) << 8) + (uint8_t)(data[1]);
+
+      processHubPacket(id, value);
+    }
+    break;
+  case SIMU_TELEMETRY_PROTOCOL_CROSSFIRE:
+    processCrossfireTelemetryFrame(module,
+                                   (uint8_t *)data.constData(),
+                                   data.count());
+    break;
+  default:
+    // Do nothing
+    break;
+  }
+}
+
+void OpenTxSimulator::sendInternalModuleTelemetry(const uint8_t protocol, const QByteArray data)
+{
+  sendTelemetry(INTERNAL_MODULE, protocol, data);
+}
+
+void OpenTxSimulator::sendExternalModuleTelemetry(const uint8_t protocol, const QByteArray data)
+{
+  sendTelemetry(EXTERNAL_MODULE, protocol, data);
 }
 
 uint8_t OpenTxSimulator::getSensorInstance(uint16_t id, uint8_t defaultValue)
@@ -567,7 +604,7 @@ void OpenTxSimulator::checkOutputsChanged()
   const static int16_t limit = 512 * 2;
   qint32 tmpVal;
   uint8_t i, idx;
-  const uint8_t phase = getFlightMode();  // opentx.cpp
+  const uint8_t phase = getFlightMode();  // edgetx.cpp
 
   for (i=0; i < chansDim; i++) {
     if (lastOutputs.chans[i] != channelOutputs[i] || m_resetOutputsData) {
@@ -712,6 +749,8 @@ class OpenTxSimulatorFactory: public SimulatorFactory
       return Board::BOARD_TARANIS_X9LITE;
 #elif defined(PCBNV14)
       return Board::BOARD_FLYSKY_NV14;
+#elif defined(PCBPL18)
+      return Board::BOARD_FLYSKY_PL18;
 #else
       return Board::BOARD_TARANIS_X9D;
 #endif

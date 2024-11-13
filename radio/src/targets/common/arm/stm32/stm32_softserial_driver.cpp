@@ -21,6 +21,9 @@
 
 #include "stm32_softserial_driver.h"
 #include "stm32_exti_driver.h"
+#include "stm32_timer.h"
+#include "stm32_gpio.h"
+#include "hal/gpio.h"
 
 #include <string.h>
 
@@ -47,8 +50,7 @@ static void _softserial_exti()
 
     // cheap debouncing...
     for (uint8_t i = 0; i < 16; ++i) {
-      if (LL_GPIO_IsInputPinSet(port->GPIOx, port->GPIO_Pin) == 0)
-        return;
+      if (!gpio_read(port->GPIO)) return;
     }
 
     // enable timer counter
@@ -67,9 +69,12 @@ static inline void _rx_fifo_clear()
   rxRidx = 0;
 }
 
-static void _softserial_init_rx(const stm32_softserial_rx_port* port,
+static bool _softserial_init_rx(const stm32_softserial_rx_port* port,
                                 const etx_serial_init* params)
 {
+  // Test if pin is in reset state
+  if(gpio_get_mode(port->GPIO) != GPIO_IN) return false;
+
   rxBitCount = 0;
   rxBuffer = port->buffer.buffer;
   rxBufLen = port->buffer.length;
@@ -80,11 +85,11 @@ static void _softserial_init_rx(const stm32_softserial_rx_port* port,
   LL_TIM_StructInit(&timInit);
 
   uint32_t freq = params->baudrate * 16;
-  if (!freq) return;
+  if (!freq) return false;
 
   timInit.Prescaler = __LL_TIM_CALC_PSC(port->TIM_Freq, freq);
 
-  // TODO: enable_tim_clock(port->TIMx);
+  stm32_timer_enable_clock(port->TIMx);
   LL_TIM_Init(port->TIMx, &timInit);
 
   LL_TIM_ClearFlag_UPDATE(port->TIMx);
@@ -93,43 +98,41 @@ static void _softserial_init_rx(const stm32_softserial_rx_port* port,
   NVIC_SetPriority(port->TIM_IRQn, 0);
   NVIC_EnableIRQ(port->TIM_IRQn);
 
-  LL_GPIO_InitTypeDef pinInit;
-  LL_GPIO_StructInit(&pinInit);
-
-  if (port->dir_GPIOx) {
-    pinInit.Pin = port->dir_Pin;
-    pinInit.Mode = LL_GPIO_MODE_OUTPUT;
-    LL_GPIO_Init(port->dir_GPIOx, &pinInit);
+  if (port->dir_GPIO != GPIO_UNDEF) {
+    gpio_init(port->dir_GPIO, GPIO_OUT, GPIO_PIN_SPEED_MEDIUM);
     if (!port->dir_Input) {
-      LL_GPIO_ResetOutputPin(port->dir_GPIOx, port->dir_Pin);
+      gpio_clear(port->dir_GPIO);
     } else {
-      LL_GPIO_SetOutputPin(port->dir_GPIOx, port->dir_Pin);
+      gpio_set(port->dir_GPIO);
     }
   }
 
-  pinInit.Pin = port->GPIO_Pin;
-  pinInit.Mode = LL_GPIO_MODE_INPUT;
-  pinInit.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
-  pinInit.Pull = LL_GPIO_PULL_DOWN;
-  LL_GPIO_Init(port->GPIOx, &pinInit);
+  // pinInit.Pin = port->GPIO_Pin;
+  // pinInit.Mode = LL_GPIO_MODE_INPUT;
+  // pinInit.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
+  // pinInit.Pull = LL_GPIO_PULL_DOWN;
+  // LL_GPIO_Init(port->GPIOx, &pinInit);
 
   // Connect EXTI line to TELEMETRY RX pin
-  LL_SYSCFG_SetEXTISource(port->EXTI_Port, port->EXTI_SysLine);
+  // LL_SYSCFG_SetEXTISource(port->EXTI_Port, port->EXTI_SysLine);
 
   // Configure EXTI for raising edge (start bit; assuming inverted serial)
   _softserialPort = port;
-  stm32_exti_enable(port->EXTI_Line, LL_EXTI_TRIGGER_RISING, _softserial_exti);
+  // stm32_exti_enable(port->EXTI_Line, LL_EXTI_TRIGGER_RISING, _softserial_exti);
+  gpio_init_int(port->GPIO, GPIO_IN_PD, GPIO_RISING, _softserial_exti);
+  return true;
 }
 
 static void _softserial_deinit_gpio(const stm32_softserial_rx_port* port)
 {
   // Reconfigure pin as input
-  LL_GPIO_InitTypeDef pinInit;
-  LL_GPIO_StructInit(&pinInit);
+  gpio_init(port->GPIO, GPIO_IN, GPIO_PIN_SPEED_LOW);
+  // LL_GPIO_InitTypeDef pinInit;
+  // LL_GPIO_StructInit(&pinInit);
 
-  pinInit.Pin = port->GPIO_Pin;
-  pinInit.Mode = LL_GPIO_MODE_INPUT;
-  LL_GPIO_Init(port->GPIOx, &pinInit);
+  // pinInit.Pin = port->GPIO_Pin;
+  // pinInit.Mode = LL_GPIO_MODE_INPUT;
+  // LL_GPIO_Init(port->GPIOx, &pinInit);
 }
 
 static void _softserial_deinit_rx(const stm32_softserial_rx_port* port)
@@ -142,7 +145,7 @@ static void _softserial_deinit_rx(const stm32_softserial_rx_port* port)
 static void* stm32_softserial_rx_init(void* hw_def, const etx_serial_init* params)
 {
   auto port = (const stm32_softserial_rx_port*)hw_def;
-  _softserial_init_rx(port, params);
+  if (!_softserial_init_rx(port, params)) return nullptr;
   return hw_def;
 }
 
@@ -193,7 +196,7 @@ void stm32_softserial_rx_timer_isr(const stm32_softserial_rx_port* port)
       rxByte >>= 1;
     }
 
-    if (LL_GPIO_IsInputPinSet(port->GPIOx, port->GPIO_Pin) == 0)
+    if (gpio_read(port->GPIO) == 0)
       rxByte |= 0x80;
 
     ++rxBitCount;
@@ -313,6 +316,8 @@ static void _conv_byte_8n1(stm32_softserial_tx_state* st, uint8_t b)
 #define PXX1_BIT_ZERO  16 /* 0 = 16us */
 #define PXX1_BIT_ONE   24 /* 1 = 24us */
 
+__attribute__ ((weak)) uint32_t __pxx1_get_inverter_comp() { return 0; }
+
 static void _conv_byte_pxx1(stm32_softserial_tx_state* st, uint8_t b)
 {
   uint32_t bits = st->serial_size < 8 ? st->serial_size : 8;
@@ -360,7 +365,7 @@ static void* stm32_softserial_tx_init(void* hw_def, const etx_serial_init* param
     freq = PXX1_FREQ;
     polarity = false;
     ocmode = LL_TIM_OCMODE_FORCED_INACTIVE;
-    cmp_val = PXX1_PWM_ON;
+    cmp_val = PXX1_PWM_ON + __pxx1_get_inverter_comp();
     break;
 
   default:
@@ -483,7 +488,7 @@ static void stm32_softserial_tx_send_buffer(void* ctx, const uint8_t* data, uint
   // dirty hack...
   if (st->conv_byte == _conv_byte_pxx1) {
     ocmode = LL_TIM_OCMODE_PWM1;
-    cmp_val = PXX1_PWM_ON;
+    cmp_val = PXX1_PWM_ON + __pxx1_get_inverter_comp();
   }
 
   stm32_pulse_start_dma_req(timer, pulses, length, ocmode, cmp_val);

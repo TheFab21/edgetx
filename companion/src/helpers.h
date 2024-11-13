@@ -1,7 +1,8 @@
 /*
- * Copyright (C) OpenTX
+ * Copyright (C) EdgeTX
  *
  * Based on code named
+ *   opentx - https://github.com/opentx/opentx
  *   th9x - http://code.google.com/p/th9x
  *   er9x - http://code.google.com/p/er9x
  *   gruvin9x - http://code.google.com/p/gruvin9x
@@ -30,6 +31,7 @@
 #include <QElapsedTimer>
 #include <QStandardItemModel>
 #include <QDialog>
+#include <QComboBox>
 
 extern const QColor colors[CPN_MAX_CURVES];
 
@@ -37,7 +39,8 @@ extern const QColor colors[CPN_MAX_CURVES];
 
 //convert from mode 1 to mode generalSettings.stickMode
 //NOTICE!  =>  1..4 -> 1..4
-#define CONVERT_MODE(x)  (((x)<=4) ? modn12x3[generalSettings.stickMode][((x)-1)] : (x))
+#define CONVERT_AIRMODE(x)      (((x)<=4) ? modn12x3[generalSettings.stickMode][((x)-1)] : (x))
+#define CONVERT_SURFACEMODE(x)  (((x)<=4) ? modn12x3[4 + generalSettings.stickMode][((x)-1)] : (x))
 
 #define CURVE_BASE   7
 #define CH(x) (SRC_CH1+(x)-1-(SRC_SWC-SRC_3POS))
@@ -51,6 +54,7 @@ extern const QColor colors[CPN_MAX_CURVES];
 #define TRIM_OFFSET 2
 
 #define TRIM_MODE_NONE  0x1F  // 0b11111
+#define TRIM_MODE_3POS  (2 * CPN_MAX_FLIGHT_MODES)
 
 bool displayT16ImportWarning();
 
@@ -103,8 +107,6 @@ class GVarGroup: public QObject {
 
 namespace Helpers
 {
-  void populateGvarUseCB(QComboBox *b, unsigned int phase);
-
   void populateFileComboBox(QComboBox * b, const QSet<QString> & set, const QString & current);
   void getFileComboBoxValue(QComboBox * b, char * dest, int length);
 
@@ -116,6 +118,7 @@ namespace Helpers
   QString removeAccents(const QString & str);
   unsigned int getBitmappedValue(const unsigned int & field, const unsigned int index = 0, const unsigned int numbits = 1, const unsigned int offset = 0);
   void setBitmappedValue(unsigned int & field, unsigned int value, unsigned int index = 0, unsigned int numbits = 1, unsigned int offset = 0);
+  int getFirstPosValueIndex(QComboBox * cbo);
 
 }  // namespace Helpers
 
@@ -260,6 +263,10 @@ class SemanticVersion
     QString toString() const;
     unsigned int toInt() const;
     bool fromInt(const unsigned int val);
+    bool isEmpty(const QString vers);
+    bool isEmpty();
+    bool isPreRelease(const QString vers);
+    bool isPreRelease();
 
     SemanticVersion& operator=(const SemanticVersion& rhs);
 

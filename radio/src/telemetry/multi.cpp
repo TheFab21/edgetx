@@ -18,7 +18,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
-#include "opentx.h"
+#include "edgetx.h"
+#include "hal/module_port.h"
 
 #include "telemetry.h"
 #include "io/multi_protolist.h"
@@ -28,6 +29,7 @@
 #include "hitec.h"
 #include "hott.h"
 #include "mlink.h"
+#include "trainer.h"
 
 constexpr int32_t MULTI_DESIRED_VERSION = (1 << 24) | (3 << 16) | (3 << 8)  | 0;
 #define MULTI_CHAN_BITS 11
@@ -77,11 +79,15 @@ static MultiModuleStatus multiModuleStatus[NUM_MODULES] = {MultiModuleStatus(), 
 static uint8_t multiBindStatus[NUM_MODULES] = {MULTI_BIND_NONE, MULTI_BIND_NONE};
 
 static MultiBufferState multiTelemetryBufferState[NUM_MODULES];
-static uint16_t multiTelemetryLastRxTS[NUM_MODULES];
 
 MultiModuleStatus &getMultiModuleStatus(uint8_t module)
 {
   return multiModuleStatus[module];
+}
+
+static uint8_t _getMultiStatusModuleIdx(const MultiModuleStatus* p)
+{
+  return p - multiModuleStatus;
 }
 
 uint8_t getMultiBindStatus(uint8_t module)
@@ -104,11 +110,6 @@ void setMultiTelemetryBufferState(uint8_t module, MultiBufferState state)
   multiTelemetryBufferState[module] = state;
 }
 
-static uint16_t& getMultiTelemetryLastRxTS(uint8_t module)
-{
-  return multiTelemetryLastRxTS[module];
-}
-
 #else // !INTERNAL_MODULE_MULTI
 
 static MultiModuleStatus multiModuleStatus;
@@ -120,6 +121,11 @@ static uint16_t multiTelemetryLastRxTS;
 MultiModuleStatus& getMultiModuleStatus(uint8_t)
 {
   return multiModuleStatus;
+}
+
+static uint8_t _getMultiStatusModuleIdx(const MultiModuleStatus*)
+{
+  return EXTERNAL_MODULE;
 }
 
 uint8_t getMultiBindStatus(uint8_t)
@@ -294,15 +300,14 @@ static void processMultiRxChannels(const uint8_t * data, uint8_t len)
     bitsavailable -= MULTI_CHAN_BITS;
     bits >>= MULTI_CHAN_BITS;
 
-    ppmInput[ch] = (value - 1024) * 500 / 800;
+    trainerInput[ch] = (value - 1024) * 500 / 800;
     ch++;
 
     if (byteIdx >= len)
       break;
   }
 
-  if (ch == maxCh)
-    ppmInputValidityTimer = PPM_IN_VALID_TIMEOUT;
+  if (ch == maxCh) { trainerResetTimer(); }
 }
 #endif
 
@@ -503,14 +508,11 @@ static void processMultiTelemetryPaket(const uint8_t * packet, uint8_t module)
 void MultiModuleStatus::getStatusString(char * statusText) const
 {
   if (!isValid()) {
-#if defined(PCBFRSKY)
-#if !defined(INTERNAL_MODULE_MULTI)
-    if (isSportLineUsedByInternalModule())
+    if (!modulePortHasRx(getModuleIndex())) {
       strcpy(statusText, STR_DISABLE_INTERNAL);
-    else
-#endif
-#endif
-    strcpy(statusText, STR_MODULE_NO_TELEMETRY);
+    } else {
+      strcpy(statusText, STR_MODULE_NO_TELEMETRY);
+    }
     return;
   }
   if (!protocolValid()) {
@@ -562,6 +564,10 @@ void MultiModuleStatus::getStatusString(char * statusText) const
   }
 }
 
+uint8_t MultiModuleStatus::getModuleIndex() const {
+  return _getMultiStatusModuleIdx(this);
+}
+
 static void processMultiTelemetryByte(const uint8_t data, uint8_t module)
 {
   uint8_t * rxBuffer = getTelemetryRxBuffer(module);
@@ -597,8 +603,6 @@ void processMultiTelemetryData(uint8_t data, uint8_t module)
 {
   uint8_t * rxBuffer = getTelemetryRxBuffer(module);
   uint8_t &rxBufferCount = getTelemetryRxBufferCount(module);
-
-  uint16_t &lastRxTS = getMultiTelemetryLastRxTS(module);
   
   // debugPrintf("State: %d, byte received %02X, buflen: %d\r\n",
   //             getMultiTelemetryBufferState(module), data, rxBufferCount);

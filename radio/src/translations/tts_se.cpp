@@ -19,7 +19,7 @@
  * GNU General Public License for more details.
  */
 
-#include "opentx.h"
+#include "edgetx.h"
 
 enum SwedishPrompts {
   SE_PROMPT_NUMBERS_BASE = 0,
@@ -34,7 +34,7 @@ enum SwedishPrompts {
 };
 
 
-  #define SE_PUSH_UNIT_PROMPT(u, p) se_pushUnitPrompt((u), (p), id)
+#define SE_PUSH_UNIT_PROMPT(u, p) se_pushUnitPrompt((u), (p), id, fragmentVolume)
 
 I18N_PLAY_FUNCTION(se, pushUnitPrompt, uint8_t unitprompt, int16_t number)
 {

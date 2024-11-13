@@ -19,12 +19,14 @@
  * GNU General Public License for more details.
  */
 
-#include "opentx.h"
-
 #include "hal/module_port.h"
 #include "hal/adc_driver.h"
 #include "hal/switch_driver.h"
+#include "hal/trainer_driver.h"
+
+#include "edgetx.h"
 #include "switches.h"
+#include "mixes.h"
 
 #undef CPN
 #include "MultiSubtypeDefs.h"
@@ -33,20 +35,6 @@ uint8_t switchToMix(uint8_t source)
 {
   div_t qr = div(source-1, 3);
   return qr.quot + MIXSRC_FIRST_SWITCH;
-}
-
-int circularIncDec(int current, int inc, int min, int max, IsValueAvailable isValueAvailable)
-{
-  do {
-    current += inc;
-    if (current < min)
-      current = max;
-    else if (current > max)
-      current = min;
-    if (!isValueAvailable || isValueAvailable(current))
-      return current;
-  } while(1);
-  return 0;
 }
 
 bool isInputAvailable(int input)
@@ -68,6 +56,15 @@ bool isRssiSensorAvailable(int sensor)
   else {
     TelemetrySensor &telemSensor = g_model.telemetrySensors[abs(sensor) - 1];
     return (telemSensor.isAvailable() && telemSensor.id == RSSI_ID);
+  }
+}
+
+bool isVarioSensorAvailable(int sensor)
+{
+  if (sensor == 0)
+    return true;
+  else {
+    return (isSensorAvailable(sensor) && (isSensorUnit(sensor, UNIT_METERS_PER_SECOND) || isSensorUnit(sensor, UNIT_FEET_PER_SECOND)));
   }
 }
 
@@ -165,186 +162,204 @@ int getChannelsUsed()
   return result;
 }
 
-bool isSourceAvailable(int source)
+static bool sourceIsAvailable(int source) { return true; }
+
+static bool isSourceLuaAvailable(int source) {
+#if defined(LUA_MODEL_SCRIPTS)
+  if (modelCustomScriptsEnabled()) {
+    div_t qr = div(source, MAX_SCRIPT_OUTPUTS);
+    return (qr.rem < scriptInputsOutputs[qr.quot].outputsCount);
+  }
+#endif
+  return false;
+}
+
+static bool isSourceStickAvailable(int source) {
+  return source < adcGetMaxInputs(ADC_INPUT_MAIN);
+}
+
+static bool isSourcePotAvailable(int source) {
+  return IS_POT_SLIDER_AVAILABLE(source);
+}
+
+#if defined(PCBHORUS)
+static bool isSourceSpacemouseAvailable(int source) {
+#if defined(SPACEMOUSE)
+  return serialGetModePort(UART_MODE_SPACEMOUSE) >= 0;
+#else
+  return false;
+#endif
+}
+#endif
+
+static bool isSourceHeliAvailable(int source) {
+#if defined(HELI)
+  return modelHeliEnabled();
+#else
+  return false;
+#endif
+}
+
+static bool isSourceTrimAvailable(int source) {
+  return source < keysGetMaxTrims();
+}
+
+static bool isSourceSwitchAvailable(int source) {
+  return SWITCH_EXISTS(source);
+}
+
+#if defined(FUNCTION_SWITCHES)
+static bool isSourceFuncSwitchAvailable(int source) {
+  return getSwitchCountInFSGroup(source + 1) > 0;
+}
+#endif
+
+static bool isSourceLSAvailable(int source) {
+  LogicalSwitchData * cs = lswAddress(source);
+  return (cs->func != LS_FUNC_NONE);
+}
+
+static bool isSourceTrainerAvailable(int source) {
+  return g_model.trainerData.mode > 0;
+}
+
+static bool isSourceGvarAvailable(int source) {
+#if defined(GVARS)
+  return modelGVEnabled();
+#else
+  return false;
+#endif
+}
+
+static bool isSourceTimerAvailable(int source) {
+  TimerData *timer = &g_model.timers[source];
+  return timer->mode != 0;
+}
+
+static bool isSourceTelemAvailable(int source) {
+  if (!modelTelemetryEnabled())
+    return false;
+  div_t qr = div(source, 3);
+  if (qr.rem == 0)
+    return isTelemetryFieldAvailable(qr.quot);
+  else
+    return isTelemetryFieldComparisonAvailable(qr.quot);
+}
+
+static bool isSourceTelemCompAvailable(int source) {
+  if (!modelTelemetryEnabled())
+    return false;
+  div_t qr = div(source, 3);
+  return isTelemetryFieldComparisonAvailable(qr.quot);
+}
+
+enum SrcTypes {
+  SRC_INPUT = 1 << 0,
+  SRC_LUA = 1 << 1,
+  SRC_STICK = 1 << 2,
+  SRC_POT = 1 << 3,
+  SRC_TILT = 1 << 4,
+  SRC_SPACEMOUSE = 1 << 5,
+  SRC_MINMAX = 1 << 6,
+  SRC_HELI = 1 << 7,
+  SRC_TRIM = 1 << 8,
+  SRC_SWITCH = 1 << 9,
+  SRC_FUNC_SWITCH = 1 << 10,
+  SRC_LOGICAL_SWITCH = 1 << 11,
+  SRC_TRAINER = 1 << 12,
+  SRC_CHANNEL = 1 << 13,
+  SRC_CHANNEL_ALL = 1 << 14,
+  SRC_GVAR = 1 << 15,
+  SRC_TX = 1 << 16,
+  SRC_TIMER = 1 << 17,
+  SRC_TELEM = 1 << 18,
+  SRC_TELEM_COMP = 1 << 19,
+};
+
+struct sourceAvailableCheck {
+  uint16_t first;
+  uint16_t last;
+  SrcTypes type;
+  bool (*check)(int);
+};
+
+static struct sourceAvailableCheck sourceChecks[] = {
+  { MIXSRC_FIRST_INPUT, MIXSRC_LAST_INPUT, SRC_INPUT, isInputAvailable },
+  { MIXSRC_FIRST_LUA, MIXSRC_LAST_LUA, SRC_LUA, isSourceLuaAvailable },
+  { MIXSRC_FIRST_STICK, MIXSRC_LAST_STICK, SRC_STICK, isSourceStickAvailable },
+  { MIXSRC_FIRST_POT, MIXSRC_LAST_POT, SRC_POT, isSourcePotAvailable },
+#if defined(IMU)
+  { MIXSRC_TILT_X, MIXSRC_TILT_Y, SRC_TILT, sourceIsAvailable },
+#endif
+#if defined(PCBHORUS)
+  { MIXSRC_FIRST_SPACEMOUSE, MIXSRC_LAST_SPACEMOUSE, SRC_SPACEMOUSE, isSourceSpacemouseAvailable },
+#endif
+  { MIXSRC_MIN, MIXSRC_MAX, SRC_MINMAX, sourceIsAvailable },
+  { MIXSRC_FIRST_HELI, MIXSRC_LAST_HELI, SRC_HELI, isSourceHeliAvailable },
+  { MIXSRC_FIRST_TRIM, MIXSRC_LAST_TRIM, SRC_TRIM, isSourceTrimAvailable },
+  { MIXSRC_FIRST_SWITCH, MIXSRC_LAST_SWITCH, SRC_SWITCH, isSourceSwitchAvailable },
+#if defined(FUNCTION_SWITCHES)
+  { MIXSRC_FIRST_CUSTOMSWITCH_GROUP, MIXSRC_LAST_CUSTOMSWITCH_GROUP, SRC_FUNC_SWITCH, isSourceFuncSwitchAvailable },
+#endif
+  { MIXSRC_FIRST_LOGICAL_SWITCH, MIXSRC_LAST_LOGICAL_SWITCH, SRC_LOGICAL_SWITCH, isSourceLSAvailable },
+  { MIXSRC_FIRST_TRAINER, MIXSRC_LAST_TRAINER, SRC_TRAINER, isSourceTrainerAvailable },
+  { MIXSRC_FIRST_CH, MIXSRC_LAST_CH, SRC_CHANNEL, isChannelUsed },
+  { MIXSRC_FIRST_CH, MIXSRC_LAST_CH, SRC_CHANNEL_ALL, sourceIsAvailable },
+  { MIXSRC_FIRST_GVAR, MIXSRC_LAST_GVAR, SRC_GVAR, isSourceGvarAvailable },
+  { MIXSRC_TX_VOLTAGE, MIXSRC_TX_GPS, SRC_TX, sourceIsAvailable },
+  { MIXSRC_FIRST_TIMER, MIXSRC_LAST_TIMER, SRC_TIMER, isSourceTimerAvailable },
+  { MIXSRC_FIRST_TELEM, MIXSRC_LAST_TELEM, SRC_TELEM, isSourceTelemAvailable },
+  { MIXSRC_FIRST_TELEM, MIXSRC_LAST_TELEM, SRC_TELEM_COMP, isSourceTelemCompAvailable },
+};
+
+bool checkSourceAvailable(int source, uint32_t sourceTypes)
 {
   if (source < 0)
-    return false;
+    source = -source;
 
-  if (source >= MIXSRC_FIRST_INPUT && source <= MIXSRC_LAST_INPUT) {
-    return isInputAvailable(source - MIXSRC_FIRST_INPUT);
-  }
-
-#if defined(LUA_MODEL_SCRIPTS)
-  if (source >= MIXSRC_FIRST_LUA && source <= MIXSRC_LAST_LUA) {
-    if (modelCustomScriptsEnabled()) {
-      div_t qr = div(source - MIXSRC_FIRST_LUA, MAX_SCRIPT_OUTPUTS);
-      return (qr.rem < scriptInputsOutputs[qr.quot].outputsCount);
-    } else {
-      return false;
+  for (size_t i = 0 ; i < DIM(sourceChecks); i += 1) {
+    if (sourceChecks[i].type & sourceTypes && source >= sourceChecks[i].first && source <= sourceChecks[i].last) {
+      return sourceChecks[i].check(source - sourceChecks[i].first);
     }
   }
-#elif defined(LUA_INPUTS)
-  if (source >= MIXSRC_FIRST_LUA && source <= MIXSRC_LAST_LUA)
-    return false;
-#endif
-
-  if (source >= MIXSRC_FIRST_STICK && source <= MIXSRC_LAST_STICK) {
-    auto idx = source - MIXSRC_FIRST_STICK;
-    return idx < adcGetMaxInputs(ADC_INPUT_MAIN);
-  }
-
-  if (source >= MIXSRC_FIRST_POT && source <= MIXSRC_LAST_POT) {
-    return IS_POT_SLIDER_AVAILABLE(source - MIXSRC_FIRST_POT);
-  }
-
-#if MAX_AXIS > 0
-  if (source >= MIXSRC_FIRST_AXIS && source <= MIXSRC_LAST_AXIS)
-    return source - MIXSRC_FIRST_AXIS < adcGetMaxInputs(ADC_INPUT_AXIS);
-#endif
-
-#if defined(PCBHORUS) && !defined(SPACEMOUSE)
-  if (source >= MIXSRC_FIRST_SPACEMOUSE && source <= MIXSRC_LAST_SPACEMOUSE)
-    return false;
-#elif defined(PCBHORUS) && defined(SPACEMOUSE)
-  if ((hasSerialMode(UART_MODE_SPACEMOUSE) == -1) &&
-      (source >= MIXSRC_FIRST_SPACEMOUSE && source <= MIXSRC_LAST_SPACEMOUSE))
-    return false;
-#endif
-
-  if (source >= MIXSRC_FIRST_SWITCH && source <= MIXSRC_LAST_SWITCH) {
-    return SWITCH_EXISTS(source - MIXSRC_FIRST_SWITCH);
-  }
-
-#if !defined(HELI)
-  if (source >= MIXSRC_FIRST_HELI && source <= MIXSRC_LAST_HELI)
-    return false;
-#else
-  if (!modelHeliEnabled() && source >= MIXSRC_FIRST_HELI && source <= MIXSRC_LAST_HELI)
-    return false;
-#endif
-
-  if (source >= MIXSRC_FIRST_TRIM && source <= MIXSRC_LAST_TRIM) {
-    return (source - MIXSRC_FIRST_TRIM) < keysGetMaxTrims();
-  }
-
-  if (source >= MIXSRC_FIRST_LOGICAL_SWITCH && source <= MIXSRC_LAST_LOGICAL_SWITCH) {
-    LogicalSwitchData * cs = lswAddress(source - MIXSRC_FIRST_LOGICAL_SWITCH);
-    return (cs->func != LS_FUNC_NONE);
-  }
-
-  if (source >= MIXSRC_FIRST_TRAINER && source <= MIXSRC_LAST_TRAINER)
-    return g_model.trainerData.mode > 0;
-
-  if (source >= MIXSRC_FIRST_CH && source <= MIXSRC_LAST_CH) {
-    return isChannelUsed(source - MIXSRC_FIRST_CH);
-  }
-
-#if !defined(GVARS)
-  if (source >= MIXSRC_FIRST_GVAR && source <= MIXSRC_LAST_GVAR)
-    return false;
-#else
-  if (!modelGVEnabled() && source >= MIXSRC_FIRST_GVAR && source <= MIXSRC_LAST_GVAR)
-    return false;
-#endif
-
-  // TX VOLTAGE, TIME and GPS are always true
-
-  if (source >= MIXSRC_FIRST_TIMER && source <= MIXSRC_LAST_TIMER) {
-    TimerData *timer = &g_model.timers[source - MIXSRC_FIRST_TIMER];
-    return timer->mode != 0;
-  }
-
-  if (source >= MIXSRC_FIRST_TELEM && source <= MIXSRC_LAST_TELEM) {
-    if (!modelTelemetryEnabled())
-      return false;
-    div_t qr = div(source - MIXSRC_FIRST_TELEM, 3);
-    if (qr.rem == 0)
-      return isTelemetryFieldAvailable(qr.quot);
-    else
-      return isTelemetryFieldComparisonAvailable(qr.quot);
-  }
-
-  return true;
-}
-
-bool isSourceAvailableInGlobalFunctions(int source)
-{
-  if (source >= MIXSRC_FIRST_TELEM && source <= MIXSRC_LAST_TELEM) {
-    return false;
-  }
-  return isSourceAvailable(source);
-}
-
-bool isSourceAvailableInCustomSwitches(int source)
-{
-  bool result = isSourceAvailable(source);
-
-  if (result && modelTelemetryEnabled() && source >= MIXSRC_FIRST_TELEM && source <= MIXSRC_LAST_TELEM) {
-    div_t qr = div(source - MIXSRC_FIRST_TELEM, 3);
-    result = isTelemetryFieldComparisonAvailable(qr.quot);
-  }
-
-  return result;
-}
-
-bool isSourceAvailableInInputs(int source)
-{
-  if (source >= MIXSRC_FIRST_STICK && source <= MIXSRC_LAST_STICK) {
-    auto idx = source - MIXSRC_FIRST_STICK;
-    return idx < adcGetMaxInputs(ADC_INPUT_MAIN);
-  }
-
-  if (source >= MIXSRC_FIRST_POT && source <= MIXSRC_LAST_POT)
-    return IS_POT_SLIDER_AVAILABLE(source - MIXSRC_FIRST_POT);
-
-#if MAX_AXIS > 0
-  if (source >= MIXSRC_FIRST_AXIS && source <= MIXSRC_LAST_AXIS) {
-    auto idx = source - MIXSRC_FIRST_AXIS;
-    return idx < adcGetMaxInputs(ADC_INPUT_AXIS);
-  }
-#endif
-
-#if defined(IMU)
-  if (source == MIXSRC_TILT_X || source == MIXSRC_TILT_Y)
-    return true;
-#endif
-
-#if defined(PCBHORUS) && defined(SPACEMOUSE)
-  if (source >= MIXSRC_FIRST_SPACEMOUSE && source <= MIXSRC_LAST_SPACEMOUSE)
-    return true;
-#endif
-  
-  if (source == MIXSRC_MAX)
-    return true;
-
-  if (source >= MIXSRC_FIRST_TRIM && source <= MIXSRC_LAST_TRIM) {
-    auto idx = source - MIXSRC_FIRST_TRIM;
-    return idx < keysGetMaxTrims();
-  }
-
-  if (source >= MIXSRC_FIRST_SWITCH && source <= MIXSRC_LAST_SWITCH)
-    return SWITCH_EXISTS(source - MIXSRC_FIRST_SWITCH);
-
-  if (source >= MIXSRC_FIRST_CH && source <= MIXSRC_LAST_CH)
-    return true;
-
-  if (source >= MIXSRC_FIRST_LOGICAL_SWITCH && source <= MIXSRC_LAST_LOGICAL_SWITCH) {
-    LogicalSwitchData * cs = lswAddress(source - MIXSRC_FIRST_LOGICAL_SWITCH);
-    return (cs->func != LS_FUNC_NONE);
-  }
-
-  if (source >= MIXSRC_FIRST_TRAINER && source <= MIXSRC_LAST_TRAINER)
-    return g_model.trainerData.mode > 0;
-
-  if (modelTelemetryEnabled() && source >= MIXSRC_FIRST_TELEM && source <= MIXSRC_LAST_TELEM) {
-    div_t qr = div(source - MIXSRC_FIRST_TELEM, 3);
-    return isTelemetryFieldAvailable(qr.quot) && isTelemetryFieldComparisonAvailable(qr.quot);
-  }
-
-  if (modelGVEnabled() && source >= MIXSRC_FIRST_GVAR && source <= MIXSRC_LAST_GVAR)
-    return true;
 
   return false;
+}
+
+#define SRC_COMMON \
+            SRC_STICK | SRC_POT | SRC_TILT | SRC_SPACEMOUSE | SRC_MINMAX | SRC_TRIM | \
+            SRC_SWITCH | SRC_FUNC_SWITCH | SRC_LOGICAL_SWITCH | SRC_TRAINER | SRC_GVAR
+
+bool isSourceAvailable(int source)
+{
+  return checkSourceAvailable(source,
+            SRC_COMMON | SRC_INPUT | SRC_LUA | SRC_HELI | SRC_CHANNEL | SRC_TX | SRC_TIMER | SRC_TELEM
+            );
+}
+
+// Used only in B&W radios for Global Functions when funcion is FUNC_PLAY_VALUE
+bool isSourceAvailableInGlobalFunctions(int source)
+{
+  return checkSourceAvailable(source,
+            SRC_COMMON | SRC_INPUT | SRC_LUA | SRC_HELI | SRC_CHANNEL | SRC_TX | SRC_TIMER
+            );
+}
+
+// Used only in B&W radios with wide screen LCD (212x64) for logical switches
+// V1 parameter when LS function is LS_FAMILY_OFS or LS_FAMILY_DIFF
+bool isSourceAvailableInCustomSwitches(int source)
+{
+  return checkSourceAvailable(source,
+            SRC_COMMON | SRC_INPUT | SRC_LUA | SRC_HELI | SRC_CHANNEL | SRC_TX | SRC_TIMER | SRC_TELEM_COMP
+            );
+}
+
+// Only used for B&W radios for Input source (color radios use isSourceAvailable)
+bool isSourceAvailableInInputs(int source)
+{
+  return checkSourceAvailable(source,
+            SRC_COMMON | SRC_CHANNEL_ALL | SRC_TELEM_COMP
+            );
 }
 
 bool isLogicalSwitchAvailable(int index)
@@ -368,6 +383,10 @@ bool isSwitchAvailable(int swtch, SwitchContext context)
 
   if (swtch >= SWSRC_FIRST_SWITCH && swtch <= SWSRC_LAST_SWITCH) {
     div_t swinfo = switchInfo(swtch);
+    if (swinfo.quot >= switchGetMaxSwitches() + switchGetMaxFctSwitches()) {
+      return false;
+    }
+
     if (!SWITCH_EXISTS(swinfo.quot)) {
       return false;
     }
@@ -387,7 +406,7 @@ bool isSwitchAvailable(int swtch, SwitchContext context)
 
   if (swtch >= SWSRC_FIRST_MULTIPOS_SWITCH && swtch <= SWSRC_LAST_MULTIPOS_SWITCH) {
     int index = (swtch - SWSRC_FIRST_MULTIPOS_SWITCH) / XPOTS_MULTIPOS_COUNT;
-    return IS_POT_MULTIPOS(index);
+    return (index < adcGetMaxInputs(ADC_INPUT_FLEX)) ? IS_POT_MULTIPOS(index) : false;
   }
 
   if (swtch >= SWSRC_FIRST_TRIM && swtch <= SWSRC_LAST_TRIM) {
@@ -432,14 +451,6 @@ bool isSwitchAvailable(int swtch, SwitchContext context)
   return true;
 }
 
-int hasSerialMode(int mode)
-{
-  for (int p = 0; p < MAX_SERIAL_PORTS; p++) {
-    if (serialGetMode(p) == mode) return p;
-  }
-  return -1;
-}
-
 bool isSerialModeAvailable(uint8_t port_nr, int mode)
 {
 #if defined(USB_SERIAL)
@@ -457,8 +468,10 @@ bool isSerialModeAvailable(uint8_t port_nr, int mode)
 #endif
 
 #if !defined(CLI)
-  if (mode == UART_MODE_CLI)
-    return false;
+  if (mode == UART_MODE_CLI) return false;
+#else
+  // CLI is only supported on VCP
+  if (port_nr != SP_VCP && mode == UART_MODE_CLI) return false;
 #endif
 
 #if !defined(INTERNAL_GPS)
@@ -500,7 +513,7 @@ bool isSerialModeAvailable(uint8_t port_nr, int mode)
     return false;
 #endif
 
-  auto p = hasSerialMode(mode);
+  auto p = serialGetModePort(mode);
   if (p >= 0 && p != port_nr) return false;
   return true;
 }
@@ -530,24 +543,6 @@ bool isSwitch2POSWarningStateAvailable(int state)
 }
 #endif // #if defined(COLORLCD)
 
-//bool isSwitchAvailableInTimers(int swtch)
-//{
-//  if (swtch >= 0) {
-//    if (swtch < TMRMODE_COUNT)
-//      return true;
-//    else
-//      swtch -= TMRMODE_COUNT-1;
-//  }
-//  else {
-//    if (swtch > -TMRMODE_COUNT)
-//      return false;
-//    else
-//      swtch += TMRMODE_COUNT-1;
-//  }
-//
-//  return isSwitchAvailable(swtch, TimersContext);
-//}
-
 bool isThrottleSourceAvailable(int src)
 {
 #if !defined(LIBOPENUI)
@@ -559,17 +554,8 @@ bool isThrottleSourceAvailable(int src)
      ((src >= MIXSRC_FIRST_CH) && (src <= MIXSRC_LAST_CH)));
 }
 
-bool isLogicalSwitchFunctionAvailable(int function)
+bool isAssignableFunctionAvailable(int function, bool modelFunctions)
 {
-  return function != LS_FUNC_RANGE;
-}
-
-bool isAssignableFunctionAvailable(int function, CustomFunctionData * functions)
-{
-#if defined(OVERRIDE_CHANNEL_FUNCTION) || defined(GVARS)
-  bool modelFunctions = (functions == g_model.customFn);
-#endif
-
   switch (function) {
     case FUNC_OVERRIDE_CHANNEL:
 #if defined(OVERRIDE_CHANNEL_FUNCTION)
@@ -585,6 +571,7 @@ bool isAssignableFunctionAvailable(int function, CustomFunctionData * functions)
 #endif
 #if !defined(HAPTIC)
     case FUNC_HAPTIC:
+      return false;
 #endif
 #if !defined(DANGEROUS_MODULE_FUNCTIONS)
     case FUNC_RANGECHECK:
@@ -595,7 +582,18 @@ bool isAssignableFunctionAvailable(int function, CustomFunctionData * functions)
     case FUNC_PLAY_SCRIPT:
       return false;
 #endif
-
+#if !defined(AUDIO_MUTE_GPIO)
+    case FUNC_DISABLE_AUDIO_AMP:
+      return false;
+#endif
+#if !defined(LED_STRIP_GPIO)
+    case FUNC_RGB_LED:
+      return false;
+#endif
+#if !defined(DEBUG)
+    case FUNC_TEST:
+      return false;
+#endif
     default:
       return true;
   }
@@ -604,9 +602,15 @@ bool isAssignableFunctionAvailable(int function, CustomFunctionData * functions)
 #if !defined(COLORLCD)
 bool isAssignableFunctionAvailable(int function)
 {
-  return isAssignableFunctionAvailable(function, menuHandlers[menuLevel] == menuModelSpecialFunctions ? g_model.customFn : g_eeGeneral.customFn);
+  return isAssignableFunctionAvailable(function, menuHandlers[menuLevel] == menuModelSpecialFunctions);
 }
 #endif
+
+bool isTimerSourceAvailable(int index)
+{
+  TimerData *timer = &g_model.timers[index];
+  return timer->mode != 0;
+}
 
 bool isSourceAvailableInGlobalResetSpecialFunction(int index)
 {
@@ -622,16 +626,14 @@ bool isSourceAvailableInResetSpecialFunction(int index)
     TelemetrySensor & telemetrySensor = g_model.telemetrySensors[index-FUNC_RESET_PARAM_FIRST_TELEM];
     return telemetrySensor.isAvailable();
   }
-#if TIMERS < 3
-    else if (index == FUNC_RESET_TIMER3) {
-    return false;
+  else if (index <= FUNC_RESET_TIMER3) {
+    if (index > (TIMERS - 1))
+      return false;
+    else {
+      TimerData *timer = &g_model.timers[index];
+      return timer->mode != 0;
+    }
   }
-#endif
-#if TIMERS < 2
-    else if (index == FUNC_RESET_TIMER2) {
-    return false;
-  }
-#endif
   else {
     return true;
   }
@@ -646,7 +648,7 @@ class AntennaSelectionMenu : public Menu
   bool& done;
 
 public:
-  AntennaSelectionMenu(bool& done) : Menu(MainWindow::instance()), done(done) {
+  AntennaSelectionMenu(bool& done) : Menu(), done(done) {
     setTitle(STR_ANTENNA);
     addLine(STR_USE_INTERNAL_ANTENNA,
             [] { globalData.externalAntennaEnabled = false; });
@@ -723,9 +725,7 @@ void checkExternalAntenna()
 #if defined(COLORLCD)
       runAntennaSelectionMenu();
 #else
-      POPUP_MENU_ADD_ITEM(STR_USE_INTERNAL_ANTENNA);
-      POPUP_MENU_ADD_ITEM(STR_USE_EXTERNAL_ANTENNA);
-      POPUP_MENU_START(onAntennaSelection);
+      POPUP_MENU_START(onAntennaSelection, 2, STR_USE_INTERNAL_ANTENNA, STR_USE_EXTERNAL_ANTENNA);
 #endif
     } else {
       globalData.externalAntennaEnabled = false;
@@ -752,10 +752,11 @@ bool isPxx2IsrmChannelsCountAllowed(int channels)
 
 bool isTrainerUsingModuleBay()
 {
-#if defined(PCBTARANIS)
-  if (TRAINER_MODE_MASTER_SBUS_EXTERNAL_MODULE <= g_model.trainerData.mode && g_model.trainerData.mode <= TRAINER_MODE_MASTER_CPPM_EXTERNAL_MODULE)
+  if (g_model.trainerData.mode == TRAINER_MODE_MASTER_SBUS_EXTERNAL_MODULE ||
+      g_model.trainerData.mode == TRAINER_MODE_MASTER_CPPM_EXTERNAL_MODULE) {
     return true;
-#endif
+  }
+
   return false;
 }
 
@@ -770,7 +771,8 @@ bool isModuleUsingSport(uint8_t moduleBay, uint8_t moduleType)
     case MODULE_TYPE_ISRM_PXX2:
     case MODULE_TYPE_R9M_LITE_PXX2:
     case MODULE_TYPE_R9M_LITE_PRO_PXX2:
-    case MODULE_TYPE_FLYSKY:
+    case MODULE_TYPE_FLYSKY_AFHDS2A:
+    case MODULE_TYPE_FLYSKY_AFHDS3:
       return false;
 
     case MODULE_TYPE_XJT_PXX1:
@@ -820,8 +822,11 @@ bool isInternalModuleSupported(int moduleType)
 #if defined(INTERNAL_MODULE_PPM)
   case MODULE_TYPE_PPM: return true;
 #endif
-#if defined(INTERNAL_MODULE_AFHDS2A) || defined(INTERNAL_MODULE_AFHDS3)
-  case MODULE_TYPE_FLYSKY: return true;
+#if defined(INTERNAL_MODULE_AFHDS2A)
+  case MODULE_TYPE_FLYSKY_AFHDS2A: return true;
+#endif
+#if defined(INTERNAL_MODULE_AFHDS3)
+  case MODULE_TYPE_FLYSKY_AFHDS3: return true;
 #endif
   }
   return false;
@@ -889,7 +894,7 @@ bool isExternalModuleAvailable(int moduleType)
     return false;
 #endif
 
-#if defined(HARDWARE_EXTERNAL_MODULE_SIZE_SML) and !defined(EXTMODULE_USART_GPIO)
+#if defined(HARDWARE_EXTERNAL_MODULE_SIZE_SML) and !defined(EXTMODULE_USART)
   if (moduleType == MODULE_TYPE_XJT_LITE_PXX2 ||
       moduleType == MODULE_TYPE_R9M_PXX2)
     return false;
@@ -915,7 +920,8 @@ bool isExternalModuleAvailable(int moduleType)
 
 #if defined(PXX2)
     return modulePortFind(EXTERNAL_MODULE, ETX_MOD_TYPE_SERIAL,
-                          ETX_MOD_PORT_UART, ETX_Pol_Normal);
+                          ETX_MOD_PORT_UART, ETX_Pol_Normal,
+                          ETX_MOD_DIR_TX_RX | ETX_MOD_FULL_DUPLEX);
 #else
     return false;
 #endif
@@ -960,7 +966,17 @@ bool isExternalModuleAvailable(int moduleType)
 #endif
 
 #if !defined(AFHDS3)
-  if (moduleType == MODULE_TYPE_FLYSKY)
+  if (moduleType == MODULE_TYPE_FLYSKY_AFHDS3)
+    return false;
+#endif
+
+#if !defined(AFHDS2)
+  if (moduleType == MODULE_TYPE_FLYSKY_AFHDS2A)
+    return false;
+#endif
+  
+#if !defined(AFHDS3)
+  if (moduleType == MODULE_TYPE_FLYSKY_AFHDS3)
     return false;
 #endif
 
@@ -1007,44 +1023,6 @@ bool isRfProtocolAvailable(int protocol)
   return true;
 }
 
-bool isTelemetryProtocolAvailable(int protocol)
-{
-#if defined(PCBTARANIS)
-  if (protocol == PROTOCOL_TELEMETRY_FRSKY_D_SECONDARY &&
-      hasSerialMode(UART_MODE_TELEMETRY) < 0) {
-    return false;
-  }
-#endif
-
-  if (protocol== PROTOCOL_TELEMETRY_CROSSFIRE) {
-    return false;
-  }
-
-  if ( protocol== PROTOCOL_TELEMETRY_GHOST) {
-    return false;
-  }
-
-#if !defined(MULTIMODULE)
-  if (protocol == PROTOCOL_TELEMETRY_SPEKTRUM || protocol == PROTOCOL_TELEMETRY_FLYSKY_IBUS || protocol == PROTOCOL_TELEMETRY_MULTIMODULE) {
-    return false;
-  }
-#endif
-
-#if !defined(AFHDS3)
-  if (protocol == PROTOCOL_TELEMETRY_AFHDS3) {
-    return false;
-  }
-#endif
-
-#if defined(PCBHORUS)
-  if (protocol == PROTOCOL_TELEMETRY_FRSKY_D_SECONDARY) {
-    return false;
-  }
-#endif
-
-  return true;
-}
-
 bool isTrainerModeAvailable(int mode)
 {
 #if defined(PCBX9E)
@@ -1056,11 +1034,7 @@ bool isTrainerModeAvailable(int mode)
 #endif
 
   if (mode == TRAINER_MODE_MASTER_SERIAL) {
-#if defined(SBUS_TRAINER)
-    return hasSerialMode(UART_MODE_SBUS_TRAINER) >= 0;
-#else
-    return false;
-#endif
+    return serialGetModePort(UART_MODE_SBUS_TRAINER) >= 0;
   }
 
   if ((mode == TRAINER_MODE_MASTER_BLUETOOTH ||
@@ -1071,45 +1045,63 @@ bool isTrainerModeAvailable(int mode)
   )
     return false;
 
-#if (defined(PCBXLITE) && !defined(PCBXLITES)) || defined(RADIO_COMMANDO8)
-  if (mode == TRAINER_MODE_MASTER_TRAINER_JACK || mode == TRAINER_MODE_SLAVE)
+  if ((mode == TRAINER_MODE_MASTER_TRAINER_JACK ||
+       mode == TRAINER_MODE_SLAVE) &&
+      !trainer_dsc_available())
     return false;
-#endif
 
-#if !defined(TRAINER_MODULE_CPPM)
-  if (mode == TRAINER_MODE_MASTER_CPPM_EXTERNAL_MODULE)
-    return false;
-#endif
+  if (mode == TRAINER_MODE_MASTER_SBUS_EXTERNAL_MODULE ||
+      mode == TRAINER_MODE_MASTER_CPPM_EXTERNAL_MODULE) {
 
-#if !defined(TRAINER_MODULE_SBUS)
-  if (mode == TRAINER_MODE_MASTER_SBUS_EXTERNAL_MODULE)
-    return false;
-#endif
+    // no external module or is enabled
+    if (!modulePortGetModuleDescription(EXTERNAL_MODULE) ||
+        IS_EXTERNAL_MODULE_ENABLED()) {
+      return false;
+    }
 
-#if defined(TRAINER_MODULE_CPPM) || defined(TRAINER_MODULE_SBUS)
-  if (IS_EXTERNAL_MODULE_ENABLED() &&
-      (mode == TRAINER_MODE_MASTER_SBUS_EXTERNAL_MODULE ||
-       mode == TRAINER_MODE_MASTER_CPPM_EXTERNAL_MODULE))
-    return false;
-#endif
+    if (mode == TRAINER_MODE_MASTER_CPPM_EXTERNAL_MODULE) {
+      auto port =  modulePortFind(EXTERNAL_MODULE, ETX_MOD_TYPE_TIMER,
+                                  ETX_MOD_PORT_TIMER, ETX_Pol_Normal,
+                                  ETX_MOD_DIR_RX);
+      return port != nullptr;      
+    }
+    
+    if (mode == TRAINER_MODE_MASTER_SBUS_EXTERNAL_MODULE) {
+      const etx_module_port_t *port = nullptr;
 
-#if !defined(MULTIMODULE) || !defined(HARDWARE_INTERNAL_MODULE) || !defined(HARDWARE_EXTERNAL_MODULE)
-  if (mode == TRAINER_MODE_MULTI)
+      // check if UART with inverter on heartbeat pin is available
+      port = modulePortFind(EXTERNAL_MODULE, ETX_MOD_TYPE_SERIAL,
+                            ETX_MOD_PORT_UART, ETX_Pol_Normal,
+                            ETX_MOD_DIR_RX);
+      if (!port) {
+        // otherwise fall back to S.Port pin
+        port =
+            modulePortFind(EXTERNAL_MODULE, ETX_MOD_TYPE_SERIAL,
+                           ETX_MOD_PORT_SPORT, ETX_Pol_Normal, ETX_MOD_DIR_RX);
+      }
+
+      return port != nullptr;
+    }
+  }
+
+  if (mode == TRAINER_MODE_MULTI) {
+
+#if !defined(MULTIMODULE)
     return false;
 #else
-  if (mode == TRAINER_MODE_MULTI &&
-      ((!IS_INTERNAL_MODULE_ENABLED() && !IS_EXTERNAL_MODULE_ENABLED()) ||
+  if ((!IS_INTERNAL_MODULE_ENABLED() && !IS_EXTERNAL_MODULE_ENABLED()) ||
        (!isModuleMultimodule(INTERNAL_MODULE) &&
-        !isModuleMultimodule(EXTERNAL_MODULE))))
+        !isModuleMultimodule(EXTERNAL_MODULE)))
     return false;
 #endif
+  }
 
   return true;
 }
 
 bool modelHasNotes()
 {
-  char filename[sizeof(MODELS_PATH)+1+sizeof(g_model.header.name)+sizeof(TEXT_EXT)] = MODELS_PATH "/";
+  char filename[sizeof(MODELS_PATH)+1+LEN_MODEL_NAME*3+sizeof(TEXT_EXT)] = MODELS_PATH "/";
   char *buf = strcat_currentmodelname(&filename[sizeof(MODELS_PATH)], 0);
   strcpy(buf, TEXT_EXT);
   if (isFileAvailable(filename)) {
@@ -1217,3 +1209,231 @@ uint8_t expandableSection(coord_t y, const char* title, uint8_t value, uint8_t a
   return value;
 }
 #endif
+
+bool isPotTypeAvailable(uint8_t type)
+{
+  if (type == FLEX_SWITCH) {
+    if (MAX_FLEX_SWITCHES == 0)
+      return false;
+
+    auto availableFlexSwitch = MAX_FLEX_SWITCHES;
+    for (uint8_t i = 0; i < adcGetMaxInputs(ADC_INPUT_FLEX); i++) {
+      if (POT_CONFIG(i) == FLEX_SWITCH) availableFlexSwitch--;
+      if (availableFlexSwitch == 0) return false;
+    }
+  }
+
+  return true;
+}
+
+bool isFlexSwitchSourceValid(int source)
+{
+  if (MAX_FLEX_SWITCHES == 0) return false;
+
+  // Allow NONE
+  if (source < 0) return true;
+
+  // already assigned ?
+  for (int i=0; i < MAX_FLEX_SWITCHES;i++) {
+    if (source == switchGetFlexConfig_raw(i))
+      return false;
+  }
+
+  if (POT_CONFIG(source) != FLEX_SWITCH) return false;
+
+  return true;
+}
+
+bool getPotInversion(int index)
+{
+  return bfGet<potconfig_t>(g_eeGeneral.potsConfig, (POT_CFG_BITS * index) + POT_CFG_TYPE_BITS, POT_CFG_INV_BITS);
+}
+
+void setPotInversion(int index, bool value)
+{
+  g_eeGeneral.potsConfig = bfSet<potconfig_t>(g_eeGeneral.potsConfig, value, (POT_CFG_BITS * index) + POT_CFG_TYPE_BITS, POT_CFG_INV_BITS);
+}
+
+uint8_t getPotType(int index)
+{
+  return bfGet<potconfig_t>(g_eeGeneral.potsConfig, POT_CFG_BITS * index, POT_CFG_TYPE_BITS);
+}
+
+void setPotType(int index, int value)
+{
+  g_eeGeneral.potsConfig = bfSet<potconfig_t>(g_eeGeneral.potsConfig, value, (POT_CFG_BITS * index), POT_CFG_TYPE_BITS);
+}
+
+#if defined(NAVIGATION_X7) || defined(NAVIGATION_X9D)
+uint8_t MENU_FIRST_LINE_EDIT(const uint8_t * horTab, uint8_t horTabMax)
+{
+  if (horTab) {
+    uint8_t result = 0;
+    while (result < horTabMax && horTab[result] >= HIDDEN_ROW)
+      ++result;
+    return result;
+  }
+  else {
+    return 0;
+  }
+}
+#endif
+
+uint8_t MODULE_BIND_ROWS(int moduleIdx)
+{
+  if (isModuleELRS(moduleIdx) && (crossfireModuleStatus[moduleIdx].major >= 4 || (crossfireModuleStatus[moduleIdx].major == 3 && crossfireModuleStatus[moduleIdx].minor >= 4)))
+    return 1;
+
+  if (isModuleCrossfire(moduleIdx))
+    return 0;
+
+  if (isModuleMultimodule(moduleIdx)) {
+    if (IS_RX_MULTI(moduleIdx))
+      return 1;
+    else
+      return 2;
+  }
+  else if (isModuleXJTD8(moduleIdx) || isModuleSBUS(moduleIdx) || isModuleAFHDS3(moduleIdx) || isModuleDSMP(moduleIdx)) {
+    return 1;
+  }
+  else if (isModulePPM(moduleIdx) || isModulePXX1(moduleIdx) || isModulePXX2(moduleIdx) || isModuleDSM2(moduleIdx)) {
+    return 2;
+  }
+  else {
+    return HIDDEN_ROW;
+  }
+}
+
+uint8_t MODULE_CHANNELS_ROWS(int moduleIdx)
+{
+  if (!IS_MODULE_ENABLED(moduleIdx)) {
+    return HIDDEN_ROW;
+  }
+#if defined(MULTIMODULE)
+  else if (isModuleMultimodule(moduleIdx)) {
+    if (IS_RX_MULTI(moduleIdx))
+      return HIDDEN_ROW;
+    else if (g_model.moduleData[moduleIdx].multi.rfProtocol == MODULE_SUBTYPE_MULTI_DSM2)
+      return 1;
+    else
+      return 0;
+  }
+#endif
+  else if (isModuleDSM2(moduleIdx) || isModuleCrossfire(moduleIdx) ||
+             isModuleGhost(moduleIdx) || isModuleSBUS(moduleIdx) ||
+             isModuleDSMP(moduleIdx)) {
+    // fixed number of channels
+    return 0;
+  } else {
+    return 1;
+  }
+}
+
+#if defined(MULTIMODULE)
+uint8_t MULTI_DISABLE_CHAN_MAP_ROW_STATIC(uint8_t moduleIdx)
+{
+  if (!isModuleMultimodule(moduleIdx))
+    return HIDDEN_ROW;
+
+  uint8_t protocol = g_model.moduleData[moduleIdx].multi.rfProtocol;
+  if (protocol < MODULE_SUBTYPE_MULTI_LAST) {
+    const mm_protocol_definition * pdef = getMultiProtocolDefinition(protocol);
+    if (pdef->disable_ch_mapping)
+      return 0;
+  }
+
+  return HIDDEN_ROW;
+}
+
+uint8_t MULTI_DISABLE_CHAN_MAP_ROW(uint8_t moduleIdx)
+{
+  if (!isModuleMultimodule(moduleIdx))
+    return HIDDEN_ROW;
+
+  MultiModuleStatus &status = getMultiModuleStatus(moduleIdx);
+  if (status.isValid()) {
+    return status.supportsDisableMapping() == true ? 0 : HIDDEN_ROW;
+  }
+
+  return MULTI_DISABLE_CHAN_MAP_ROW_STATIC(moduleIdx);
+}
+
+bool MULTIMODULE_PROTOCOL_KNOWN(uint8_t moduleIdx)
+{
+  if (!isModuleMultimodule(moduleIdx)) {
+    return false;
+  }
+
+  if (g_model.moduleData[moduleIdx].multi.rfProtocol < MODULE_SUBTYPE_MULTI_LAST) {
+    return true;
+  }
+
+  MultiModuleStatus &status = getMultiModuleStatus(moduleIdx);
+  if (status.isValid()) {
+    return status.protocolValid();
+  }
+
+  return false;
+}
+
+bool MULTIMODULE_HAS_SUBTYPE(uint8_t moduleIdx)
+{
+  MultiModuleStatus &status = getMultiModuleStatus(moduleIdx);
+  int proto = g_model.moduleData[moduleIdx].multi.rfProtocol;
+
+  if (status.isValid()) {
+    TRACE("(%d) status.protocolSubNbr = %d", proto, status.protocolSubNbr);
+    return status.protocolSubNbr > 0;
+  }
+  else
+  {
+    if (proto > MODULE_SUBTYPE_MULTI_LAST) {
+      return true;
+    }
+    else {
+      auto subProto = getMultiProtocolDefinition(proto);
+      return subProto->subTypeString != nullptr;
+    }
+  }
+}
+
+uint8_t MULTIMODULE_RFPROTO_COLUMNS(uint8_t moduleIdx)
+{
+#if LCD_W < 212
+  if (g_model.moduleData[moduleIdx].multi.rfProtocol == MODULE_SUBTYPE_MULTI_DSM2)
+    return (MULTIMODULE_HAS_SUBTYPE(moduleIdx) ? (uint8_t) 1 : HIDDEN_ROW);
+  else
+    return (MULTIMODULE_HAS_SUBTYPE(moduleIdx) ? (uint8_t) 0 : HIDDEN_ROW);
+#else
+  return (MULTIMODULE_HAS_SUBTYPE(moduleIdx) ? (uint8_t) 1 : 0);
+#endif
+}
+
+uint8_t MULTIMODULE_HASOPTIONS(uint8_t moduleIdx)
+{
+  if (!isModuleMultimodule(moduleIdx))
+    return false;
+
+  uint8_t protocol = g_model.moduleData[moduleIdx].multi.rfProtocol;
+  MultiModuleStatus &status = getMultiModuleStatus(moduleIdx);
+
+  if (status.isValid())
+    return status.optionDisp;
+
+  if (protocol < MODULE_SUBTYPE_MULTI_LAST)
+    return getMultiProtocolDefinition(protocol)->optionsstr != nullptr;
+
+  return false;
+}
+#endif
+
+uint8_t MODULE_OPTION_ROW(uint8_t moduleIdx)
+{
+  if(isModuleR9MNonAccess(moduleIdx) || isModuleSBUS(moduleIdx))
+    return TITLE_ROW;
+  if(isModuleAFHDS3(moduleIdx))
+    return HIDDEN_ROW;
+  if(isModuleGhost(moduleIdx))
+    return 0;
+  return MULTIMODULE_OPTIONS_ROW(moduleIdx);
+}

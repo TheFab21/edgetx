@@ -1,7 +1,8 @@
 /*
- * Copyright (C) OpenTX
+ * Copyright (C) EdgeTX
  *
  * Based on code named
+ *   opentx - https://github.com/opentx/opentx
  *   th9x - http://code.google.com/p/th9x
  *   er9x - http://code.google.com/p/er9x
  *   gruvin9x - http://code.google.com/p/gruvin9x
@@ -43,9 +44,9 @@ bool TimerData::isEmpty() const
           persistent == 0 /*&& pvalue == 0*/);
 }
 
-bool TimerData::isModeOff()
+bool TimerData::isModeOff() const
 {
-  return swtch == RawSwitch(SWITCH_TYPE_TIMER_MODE, 0);
+  return mode == TIMERMODE_OFF;
 }
 
 QString TimerData::nameToString(int index) const

@@ -28,7 +28,7 @@
 #include "pulses/pulses.h"
 #include "gui_common.h"
 
-#include "opentx.h" // reusableBuffer
+#include "edgetx.h" // reusableBuffer
 
 #include <algorithm>
 
@@ -183,7 +183,7 @@ std::string MultiRfProtocols::getProtoLabel(unsigned int proto) const
       return protoList[idx].label;
     }
   }
-  return std::string();
+  return std::to_string(proto);
 }
 
 std::string MultiRfProtocols::getLastProtoLabel() const

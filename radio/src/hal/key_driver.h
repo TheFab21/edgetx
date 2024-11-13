@@ -23,12 +23,12 @@
 
 #include <stdint.h>
 
+// Match with /companion/src/simulation/simulateduiwidget.h
 enum EnumKeys {
   KEY_MENU,
   KEY_EXIT,
   KEY_ENTER,
 
-  KEY_PAGE,
   KEY_PAGEUP,
   KEY_PAGEDN,
 
@@ -50,11 +50,7 @@ enum EnumKeys {
 
   MAX_KEYS
 };
-#if defined(RADIO_T20)
-#define MAX_TRIMS 8
-#else
-#define MAX_TRIMS 6
-#endif
+
 // returns a bit field with each key set as (1 << KEY_xxx)
 uint32_t readKeys();
 

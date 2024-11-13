@@ -19,7 +19,7 @@
  * GNU General Public License for more details.
  */
 
-#include "opentx.h"
+#include "edgetx.h"
 #include "tasks.h"
 #include "mixer_scheduler.h"
 
@@ -40,36 +40,23 @@ void menuStatisticsView(event_t event)
 
   switch (event) {
     case EVT_KEY_FIRST(KEY_UP):
-#if defined(KEYS_GPIO_REG_PAGEDN)
     case EVT_KEY_BREAK(KEY_PAGEDN):
-#elif defined(NAVIGATION_X7)
-    case EVT_KEY_BREAK(KEY_PAGE):
-#endif
-
       chainMenu(menuStatisticsDebug);
       break;
 
     case EVT_KEY_FIRST(KEY_DOWN):
-#if defined(KEYS_GPIO_REG_PAGEUP)
     case EVT_KEY_BREAK(KEY_PAGEUP):
-      killEvents(event);
       chainMenu(menuStatisticsDebug2);
-#elif defined(NAVIGATION_X7)
-    case EVT_KEY_LONG(KEY_PAGE):
-      killEvents(event);
-      chainMenu(menuStatisticsDebug2);
-#else
-      chainMenu(menuStatisticsDebug);
-#endif
       break;
 
     case EVT_KEY_LONG(KEY_ENTER):
+      killEvents(event);
       g_eeGeneral.globalTimer = 0;
       storageDirty(EE_GENERAL);
       sessionTimer = 0;
       break;
 
-    case EVT_KEY_FIRST(KEY_EXIT):
+    case EVT_KEY_BREAK(KEY_EXIT):
       chainMenu(menuMainView);
       break;
   }
@@ -125,13 +112,13 @@ void menuStatisticsDebug(event_t event)
       break;
 
     case EVT_KEY_LONG(KEY_ENTER):
+      killEvents(event);
       g_eeGeneral.globalTimer = 0;
       sessionTimer = 0;
       storageDirty(EE_GENERAL);
-      killEvents(event);
       break;
 
-    case EVT_KEY_FIRST(KEY_ENTER):
+    case EVT_KEY_BREAK(KEY_ENTER):
 #if defined(LUA)
       maxLuaInterval = 0;
       maxLuaDuration = 0;
@@ -140,53 +127,24 @@ void menuStatisticsDebug(event_t event)
       break;
 
     case EVT_KEY_FIRST(KEY_UP):
-#if defined(KEYS_GPIO_REG_PAGEDN)
     case EVT_KEY_BREAK(KEY_PAGEDN):
       disableVBatBridge();
       chainMenu(menuStatisticsDebug2);
       break;
-#elif defined(NAVIGATION_X7)
-    case EVT_KEY_BREAK(KEY_PAGE):
-      disableVBatBridge();
-      chainMenu(menuStatisticsDebug2);
-      break;
-#endif
 
     case EVT_KEY_FIRST(KEY_DOWN):
-#if defined(KEYS_GPIO_REG_PAGEUP)
     case EVT_KEY_BREAK(KEY_PAGEUP):
-#elif defined(NAVIGATION_X7)
-    case EVT_KEY_LONG(KEY_PAGE):
-#endif
-      killEvents(event);
       disableVBatBridge();
       chainMenu(menuStatisticsView);
       break;
 
-    case EVT_KEY_FIRST(KEY_EXIT):
+    case EVT_KEY_BREAK(KEY_EXIT):
       disableVBatBridge();
       chainMenu(menuMainView);
       break;
   }
 
-
   uint8_t y = FH + 1;
-
-#if defined(TX_CAPACITY_MEASUREMENT)
-  // current
-  lcdDrawTextAlignedLeft(y, STR_CPU_CURRENT);
-  drawValueWithUnit(MENU_DEBUG_COL1_OFS, y, getCurrent(), UNIT_MILLIAMPS, LEFT);
-  uint32_t current_scale = 488 + g_eeGeneral.txCurrentCalibration;
-  lcdDrawChar(MENU_DEBUG_COL2_OFS, y, '>');
-  drawValueWithUnit(MENU_DEBUG_COL2_OFS+FW+1, y, Current_max*10*current_scale/8192, UNIT_RAW, LEFT);
-  y += FH;
-
-  // consumption
-  lcdDrawTextAlignedLeft(y, STR_CPU_MAH);
-  drawValueWithUnit(MENU_DEBUG_COL1_OFS, y, g_eeGeneral.mAhUsed + Current_used*current_scale/8192/36, UNIT_MAH, LEFT|PREC1);
-  y += FH;
-#endif
-
 
   lcdDrawTextAlignedLeft(y, STR_FREE_MEM_LABEL);
   lcdDrawNumber(MENU_DEBUG_COL1_OFS, y, availableMemory(), LEFT);
@@ -214,8 +172,10 @@ void menuStatisticsDebug(event_t event)
   lcdDrawNumber(MENU_DEBUG_COL1_OFS, y, menusStack.available(), LEFT);
   lcdDrawText(lcdLastRightPos, y, "/");
   lcdDrawNumber(lcdLastRightPos, y, mixerStack.available(), LEFT);
+#if defined(AUDIO)
   lcdDrawText(lcdLastRightPos, y, "/");
   lcdDrawNumber(lcdLastRightPos, y, audioStack.available(), LEFT);
+#endif
   y += FH;
 
 #if defined(DEBUG_LATENCY)
@@ -236,30 +196,21 @@ void menuStatisticsDebug2(event_t event)
   title(STR_MENUDEBUG);
 
   switch(event) {
-    // case EVT_KEY_FIRST(KEY_ENTER):
+    // case EVT_KEY_BREAK(KEY_ENTER):
     //   telemetryErrors  = 0;
     //   break;
 
     case EVT_KEY_FIRST(KEY_UP):
-#if defined(KEYS_GPIO_REG_PAGEDN)
     case EVT_KEY_BREAK(KEY_PAGEDN):
-#elif defined(NAVIGATION_X7)
-    case EVT_KEY_BREAK(KEY_PAGE):
-#endif
       chainMenu(menuStatisticsView);
       return;
 
     case EVT_KEY_FIRST(KEY_DOWN):
-#if defined(KEYS_GPIO_REG_PAGEUP)
     case EVT_KEY_BREAK(KEY_PAGEUP):
-#elif defined(NAVIGATION_X7)
-    case EVT_KEY_LONG(KEY_PAGE):
-#endif
-      killEvents(event);
       chainMenu(menuStatisticsDebug);
       break;
 
-    case EVT_KEY_FIRST(KEY_EXIT):
+    case EVT_KEY_BREAK(KEY_EXIT):
       chainMenu(menuMainView);
       break;
   }

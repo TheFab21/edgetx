@@ -19,19 +19,26 @@
  * GNU General Public License for more details.
  */
 
-#include "opentx.h"
+#include "edgetx.h"
 #include "timers_driver.h"
+#include "hal/abnormal_reboot.h"
+#include "hal/watchdog_driver.h"
 
 #include "tasks.h"
 #include "tasks/mixer_task.h"
 
-#include "watchdog_driver.h"
+
+#if defined(LIBOPENUI)
+#include "startup_shutdown.h"
+#endif
 
 RTOS_TASK_HANDLE menusTaskId;
 RTOS_DEFINE_STACK(menusTaskId, menusStack, MENUS_STACK_SIZE);
 
+#if defined(AUDIO)
 RTOS_TASK_HANDLE audioTaskId;
 RTOS_DEFINE_STACK(audioTaskId, audioStack, AUDIO_STACK_SIZE);
+#endif
 
 RTOS_MUTEX_HANDLE audioMutex;
 
@@ -47,58 +54,7 @@ TASK_FUNCTION(menusTask)
   LvglWrapper::instance();
 #endif
 
-#if defined(SPLASH) && !defined(STARTUP_ANIMATION)
-  tmr10ms_t splashStartTime = 0;
-  bool waitSplash = false;
-  if (!UNEXPECTED_SHUTDOWN()) {
-    splashStartTime = get_tmr10ms();
-    waitSplash = true;
-    drawSplash();
-    TRACE("drawSplash() completed");
-  }
-#endif
-
-#if defined(HARDWARE_TOUCH) && !defined(PCBFLYSKY) && !defined(SIMU)
-  touchPanelInit();
-#endif
-
-  opentxInit();
-
-#if defined(SPLASH) && !defined(STARTUP_ANIMATION)
-  if (waitSplash){
-    extern bool inactivityCheckInputs();
-    extern void checkSpeakerVolume();
-
-#if defined(SIMU)
-    // Simulator - inputsMoved() returns true immediately without this!
-    RTOS_WAIT_TICKS(30);
-#endif
-
-    splashStartTime += SPLASH_TIMEOUT;
-    while (splashStartTime > get_tmr10ms()) {
-      WDG_RESET();
-      checkSpeakerVolume();
-      checkBacklight();
-      RTOS_WAIT_TICKS(10);
-      auto evt = getEvent();
-      if (evt || inactivityCheckInputs()) {
-        if (evt)
-          killEvents(evt);
-        break;
-      }
-#if defined(SIMU)
-      // Allow simulator to exit if closed while splash showing
-      uint32_t pwr_check = pwrCheck();
-      if (pwr_check == e_power_off) {
-        break;
-      }
-#endif
-    }
-
-    // Reset timer so special/global functions set to !1x don't get triggered
-    START_SILENCE_PERIOD();
-  }
-#endif
+  edgeTxInit();
 
   mixerTaskInit();
 
@@ -141,7 +97,7 @@ TASK_FUNCTION(menusTask)
 #endif
 
   drawSleepBitmap();
-  opentxClose();
+  edgeTxClose();
   boardOff();
 
   TASK_RETURN();
@@ -158,7 +114,7 @@ void tasksStart()
   RTOS_CREATE_TASK(menusTaskId, menusTask, "menus", menusStack,
                    MENUS_STACK_SIZE, MENUS_TASK_PRIO);
 
-#if !defined(SIMU)
+#if !defined(SIMU) && defined(AUDIO)
   RTOS_CREATE_TASK(audioTaskId, audioTask, "audio", audioStack,
                    AUDIO_STACK_SIZE, AUDIO_TASK_PRIO);
 #endif

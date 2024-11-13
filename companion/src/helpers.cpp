@@ -1,7 +1,8 @@
 /*
- * Copyright (C) OpenTX
+ * Copyright (C) EdgeTX
  *
  * Based on code named
+ *   opentx - https://github.com/opentx/opentx
  *   th9x - http://code.google.com/p/th9x
  *   er9x - http://code.google.com/p/er9x
  *   gruvin9x - http://code.google.com/p/gruvin9x
@@ -224,17 +225,6 @@ void GVarGroup::setWeight(int val)
  * Helpers namespace functions
 */
 
-// TODO: Move lookup to GVarData class (w/out combobox)
-void Helpers::populateGvarUseCB(QComboBox * b, unsigned int phase)
-{
-  b->addItem(QCoreApplication::translate("GVarData", "Own value"));
-  for (int i=0; i<getCurrentFirmware()->getCapability(FlightModes); i++) {
-    if (i != (int)phase) {
-      b->addItem(QCoreApplication::translate("GVarData", "Flight mode %1 value").arg(i));
-    }
-  }
-}
-
 static bool caseInsensitiveLessThan(const QString &s1, const QString &s2)
 {
   return s1.toLower() < s2.toLower();
@@ -260,11 +250,11 @@ bool displayT16ImportWarning()
 void Helpers::populateFileComboBox(QComboBox * b, const QSet<QString> & set, const QString & current)
 {
   b->clear();
-  b->addItem("----");
+  b->addItem(CPN_STR_NONE_ITEM);
 
   bool added = false;
   // Convert set into list and sort it alphabetically case insensitive
-  QStringList list = QStringList::fromSet(set);
+  QStringList list(set.begin(), set.end());
   std::sort(list.begin(), list.end(), caseInsensitiveLessThan);
   foreach (QString entry, list) {
     b->addItem(entry);
@@ -283,7 +273,7 @@ void Helpers::populateFileComboBox(QComboBox * b, const QSet<QString> & set, con
 void Helpers::getFileComboBoxValue(QComboBox * b, char * dest, int length)
 {
   memset(dest, 0, length+1);
-  if (b->currentText() != "----") {
+  if (b->currentText() != CPN_STR_NONE_ITEM) {
     strncpy(dest, b->currentText().toLatin1(), length);
   }
 }
@@ -322,6 +312,37 @@ void Helpers::setBitmappedValue(unsigned int & field, unsigned int value, unsign
 
   unsigned int fieldmask = ((unsigned int)mask << (numbits * index + offset));
   field = (field & ~fieldmask) | (value << (numbits * index + offset));
+}
+
+// return index of 'none' ie zero or first positive data entry in potentially an asymetrical list
+int Helpers::getFirstPosValueIndex(QComboBox * cbo)
+{
+  const int cnt = cbo->count();
+  if (cnt == 0)
+    return -1;
+
+  const int idx = cnt / 2;
+  const int val = cbo->itemData(idx).toInt();
+
+  if (val == 0)
+    return idx;
+
+  const int step = val > 0 ? -1 : 1;
+
+  for (int i = idx + step; i >= 0 && i < cbo->count(); i += step) {
+    if (cbo->findData(i) == 0)
+      return i;
+    else if (step < 0 && cbo->itemData(i).toInt() < 0) {
+      if (i++ < cbo->count())
+        return i++;
+      else
+        return -1;
+    }
+    else if (step > 0 && cbo->itemData(i).toInt() > 0)
+      return i;
+  }
+
+  return -1;
 }
 
 #ifdef __APPLE__
@@ -381,9 +402,10 @@ void startSimulation(QWidget * parent, RadioData & radioData, int modelIdx)
 
 QPixmap makePixMap(const QImage & image)
 {
-  Firmware * firmware = getCurrentFirmware();
-  QImage result = image.scaled(firmware->getCapability(LcdWidth), firmware->getCapability(LcdHeight));
-  if (firmware->getCapability(LcdDepth) == 4) {
+  Board::Type board = getCurrentBoard();
+  QImage result = image.scaled(Boards::getCapability(board, Board::LcdWidth), Boards::getCapability(board, Board::LcdHeight));
+
+  if (Boards::getCapability(board, Board::LcdDepth) == 4) {
     result = result.convertToFormat(QImage::Format_RGB32);
     for (int i = 0; i < result.width(); ++i) {
       for (int j = 0; j < result.height(); ++j) {
@@ -882,6 +904,34 @@ QString SemanticVersion::toString() const
   }
 
   return ret;
+}
+
+bool SemanticVersion::isEmpty(const QString vers)
+{
+  fromString(vers);
+  return isEmpty();
+}
+
+bool SemanticVersion::isEmpty()
+{
+  if (toInt() == SemanticVersion().toInt() )
+    return true;
+  else
+    return false;
+}
+
+bool SemanticVersion::isPreRelease(const QString vers)
+{
+  fromString(vers);
+  return isPreRelease();
+}
+
+bool SemanticVersion::isPreRelease()
+{
+  if (version.preReleaseType != PR_NONE)
+    return true;
+  else
+    return false;
 }
 
 int SemanticVersion::compare(const SemanticVersion& other)

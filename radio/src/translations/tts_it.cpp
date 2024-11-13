@@ -19,7 +19,7 @@
  * GNU General Public License for more details.
  */
 
-#include "opentx.h"
+#include "edgetx.h"
 
 enum ItalianPrompts {
   IT_PROMPT_NUMBERS_BASE = 0,
@@ -58,7 +58,7 @@ enum ItalianPrompts {
 
 };
 
-  #define IT_PUSH_UNIT_PROMPT(u, p) it_pushUnitPrompt((u), (p), id)
+#define IT_PUSH_UNIT_PROMPT(u, p) it_pushUnitPrompt((u), (p), id, fragmentVolume)
 
 I18N_PLAY_FUNCTION(it, pushUnitPrompt, uint8_t unitprompt, int16_t number)
 {

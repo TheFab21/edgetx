@@ -1,7 +1,8 @@
 /*
- * Copyright (C) OpenTX
+ * Copyright (C) EdgeTX
  *
  * Based on code named
+ *   opentx - https://github.com/opentx/opentx
  *   th9x - http://code.google.com/p/th9x
  *   er9x - http://code.google.com/p/er9x
  *   gruvin9x - http://code.google.com/p/gruvin9x
@@ -100,7 +101,7 @@ class TimerData {
    void convert(RadioDataConversionState& cstate);
    void clear();
    bool isEmpty() const;
-   bool isModeOff();
+   bool isModeOff() const;
    QString nameToString(int index) const;
    QString countdownBeepToString() const;
    QString countdownStartToString() const;

@@ -19,7 +19,7 @@
  * GNU General Public License for more details.
  */
 
-#include "opentx.h"
+#include "edgetx.h"
 
 enum SlovakPrompts {
   SK_PROMPT_NUMBERS_BASE = 0,
@@ -40,7 +40,7 @@ enum SlovakPrompts {
 };
 
 
-  #define SK_PUSH_UNIT_PROMPT(u, p) sk_pushUnitPrompt((u), (p), id)
+#define SK_PUSH_UNIT_PROMPT(u, p) sk_pushUnitPrompt((u), (p), id, fragmentVolume)
 
 #define MUZSKY 0x80
 #define ZENSKY 0x81

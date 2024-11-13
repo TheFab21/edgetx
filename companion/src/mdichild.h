@@ -1,7 +1,8 @@
 /*
- * Copyright (C) OpenTX
+ * Copyright (C) EdgeTX
  *
  * Based on code named
+ *   opentx - https://github.com/opentx/opentx
  *   th9x - http://code.google.com/p/th9x
  *   er9x - http://code.google.com/p/er9x
  *   gruvin9x - http://code.google.com/p/gruvin9x
@@ -115,6 +116,7 @@ class MdiChild : public QWidget
     void updateNavigation();
     void updateTitle();
     void setModified();
+    void setCurrentModelModified();
     void retranslateUi();
     void showModelsListContextMenu(const QPoint & pos);
     void showLabelsContextMenu(const QPoint & pos);
@@ -147,7 +149,7 @@ class MdiChild : public QWidget
     void labelRename();
     void labelMoveUp();
     void labelMoveDown();
-    void modelLabelsChanged(int row);
+    void modelLabelsChanged(int index);
     void labelsFault(QString msg);
     void wizardEdit();
     void modelDuplicate();
@@ -228,6 +230,7 @@ class MdiChild : public QWidget
     const quint16 stateDataVersion;
     AbstractStaticItemModel* modelSortOrderItemModel;
     QComboBox* cboModelSortOrder;
+    void setModelModified(const int modelIndex, bool cascade = true);
 };
 
 // This will draw the drop indicator across all columns of a model View (vs. in just one column), and lets us make the indicator more obvious.

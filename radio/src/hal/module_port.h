@@ -24,15 +24,14 @@
 #include <stdint.h>
 #include "serial_driver.h"
 #include "timer_driver.h"
-#include "definitions.h"
 
 //
 // Module ports
 //
 
 // flags
-#define ETX_MOD_DIR_TX      (1 << 0)
-#define ETX_MOD_DIR_RX      (1 << 1)
+#define ETX_MOD_DIR_RX      (1 << 0)
+#define ETX_MOD_DIR_TX      (1 << 1)
 #define ETX_MOD_DIR_TX_RX   (ETX_MOD_DIR_TX | ETX_MOD_DIR_RX)
 #define ETX_MOD_FULL_DUPLEX (1 << 2)
 
@@ -41,11 +40,11 @@
 #define ETX_MOD_TYPE_SERIAL (1 << 1)
 
 enum ModulePort : uint8_t {
-  ETX_MOD_PORT_UART,
-  ETX_MOD_PORT_TIMER,
-  ETX_MOD_PORT_SOFT_INV,
-  ETX_MOD_PORT_SPORT,
-  ETX_MOD_PORT_SPORT_INV,
+  ETX_MOD_PORT_UART,      // UART on heartbeat pin
+  ETX_MOD_PORT_TIMER,     // PPM or TX on CPPM pin
+  ETX_MOD_PORT_SOFT_INV,  // TX soft-serial 
+  ETX_MOD_PORT_SPORT,     // UART on S.Port
+  ETX_MOD_PORT_SPORT_INV, // RX soft-serial sampled bit-by-bit via timer IRQ on S.PORT
   ETX_MOD_PORT_MAX
 };
 
@@ -118,7 +117,8 @@ void modulePortConfigExtra(const etx_module_port_t* port);
 const etx_module_t* modulePortGetModuleDescription(uint8_t module);
 
 const etx_module_port_t* modulePortFind(uint8_t module, uint8_t type,
-                                        uint8_t port, uint8_t polarity);
+                                        uint8_t port, uint8_t polarity,
+                                        uint8_t direction);
 
 void modulePortSetPower(uint8_t module, uint8_t enabled);
 
@@ -126,7 +126,8 @@ bool modulePortPowered(uint8_t module);
 
 // Init module port with params (driver & context stored locally)
 etx_module_state_t* modulePortInitSerial(uint8_t module, uint8_t port,
-                                         const etx_serial_init* params);
+                                         const etx_serial_init* params,
+                                         bool softserial_fallback);
 
 // Init module port with params (driver & context stored locally)
 etx_module_state_t* modulePortInitTimer(uint8_t module, uint8_t port,
@@ -134,6 +135,9 @@ etx_module_state_t* modulePortInitTimer(uint8_t module, uint8_t port,
 
 // De-init port and clear data
 void modulePortDeInit(etx_module_state_t* st);
+
+// De-init RX part
+void modulePortDeInitRxPort(etx_module_state_t* st);
 
 // Once initialized, retrieve module serial driver and context
 etx_module_state_t* modulePortGetState(uint8_t module);
@@ -158,3 +162,9 @@ inline void* modulePortGetCtx(const etx_module_driver_t& d) {
   return d.ctx;
 }
 
+bool modulePortIsPortUsedByModule(uint8_t module, uint8_t port);
+bool modulePortIsPortUsed(uint8_t port);
+
+int8_t modulePortGetModuleForPort(uint8_t port);
+
+bool modulePortHasRx(uint8_t module);

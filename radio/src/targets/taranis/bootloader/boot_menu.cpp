@@ -39,7 +39,11 @@ void bootloaderInitScreen()
   lcdSetContrast(true);
 
   backlightInit();
+#if defined(LCD_BRIGHTNESS_DEFAULT)
+  backlightEnable(LCD_BRIGHTNESS_DEFAULT);
+#else
   backlightFullOn();
+#endif
 }
 
 static void bootloaderDrawMsg(unsigned int x, const char *str, uint8_t line, bool inverted)
@@ -52,6 +56,19 @@ void bootloaderDrawFilename(const char *str, uint8_t line, bool selected)
   bootloaderDrawMsg(INDENT_WIDTH, str, line, selected);
 }
 
+bool checkFirmwareFlavor(const char * vers)
+{
+  if (strncmp(vers,FLAVOUR, sizeof(FLAVOUR) - 1) != 0)
+    return false;
+
+  char * tmp = (char *) vers;
+  while (*tmp != '-') tmp++;
+  if ((tmp - vers) != (sizeof(FLAVOUR) - 1))
+    return false;
+
+  return true;
+}
+
 void bootloaderDrawScreen(BootloaderState st, int opt, const char *str)
 {
   lcdClear();
@@ -60,12 +77,7 @@ void bootloaderDrawScreen(BootloaderState st, int opt, const char *str)
 
   if (st == ST_START) {
     lcdDrawText(3*FW, 2*FH, TR_BL_WRITE_FW, opt == 0 ? INVERS : 0);
-#if defined(EEPROM)
-    lcdDrawText(3*FW, 3*FH, TR_BL_RESTORE_EEPROM, opt == 1 ? INVERS : 0);
-    lcdDrawText(3*FW, 4*FH, TR_BL_EXIT, opt == 2 ? INVERS : 0);
-#else
     lcdDrawText(3*FW, 3*FH, TR_BL_EXIT, opt == 1 ? INVERS : 0);
-#endif    
 
     lcdDrawText(LCD_W / 2, 5 * FH + FH / 2, TR_BL_OR_PLUGIN_USB_CABLE, CENTERED);
 
@@ -98,16 +110,24 @@ void bootloaderDrawScreen(BootloaderState st, int opt, const char *str)
         bootloaderDrawMsg(0, TR_BL_INVALID_EEPROM, 2, false);
     }
     else if (opt == FC_OK) {
+      bool flavorCheck = false;
       if (memoryType == MEM_FLASH) {
         const char * vers = getFirmwareVersion((const char *)Block_buffer);
 #if LCD_W < 212
         // Remove "edgetx-" from string
         if (strncmp(vers, "edgetx-", 7) == 0)
           vers += 7;
+        flavorCheck = checkFirmwareFlavor(vers);
+#else
+        flavorCheck = checkFirmwareFlavor(vers + 7);
 #endif
+
         bootloaderDrawMsg(INDENT_WIDTH, vers, 0, false);
       }
-      bootloaderDrawMsg(0, TR_BL_HOLD_ENTER_TO_START, 2, false);
+      if (flavorCheck)
+        bootloaderDrawMsg(0, TR_BL_HOLD_ENTER_TO_START, 2, false);
+      else
+        bootloaderDrawMsg(0, TR_BL_INVALID_FIRMWARE, 2, false);
     }
   }
   else if (st == ST_FLASHING) {

@@ -73,8 +73,15 @@ extern int8_t s_editMode; // global editmode
 #define INCDEC_SOURCE                  0x10
 #define INCDEC_REP10                   0x40
 #define NO_DBLKEYS                     0x80
+#define INCDEC_SOURCE_INVERT           0x100
+#define INCDEC_SOURCE_VALUE            0x200  // Field can be source or value
+#define INCDEC_SKIP_VAL_CHECK_FUNC     0x400  // Skip isValueAvailable function when changing value (only used for popup)
 
 int checkIncDec(event_t event, int val, int i_min, int i_max,
+                unsigned int i_flags = 0, IsValueAvailable isValueAvailable = nullptr,
+                const CheckIncDecStops &stops = stops100);
+
+int checkIncDec(event_t event, int val, int i_min, int i_max, int srcMin, int srcMax,
                 unsigned int i_flags = 0, IsValueAvailable isValueAvailable = nullptr,
                 const CheckIncDecStops &stops = stops100);
 
@@ -96,7 +103,7 @@ void check(event_t event, uint8_t curr, const MenuHandler *menuTab,
            vertpos_t rowcount, uint8_t flags = 0);
 
 #define INCDEC_DECLARE_VARS(f) \
-  uint8_t incdecFlag = (f);    \
+  uint16_t incdecFlag = (f);    \
   IsValueAvailable isValueAvailable = nullptr
 
 #define INCDEC_SET_FLAG(f) incdecFlag = (f)
@@ -135,6 +142,11 @@ swsrc_t checkIncDecMovedSwitch(swsrc_t val);
 #endif
 
 void repeatLastCursorMove(event_t event);
+#if defined(NAVIGATION_9X) || defined(NAVIGATION_XLITE)
+void repeatLastCursorHorMove(event_t event);
+#else
+#define repeatLastCursorHorMove(event) repeatLastCursorMove(event)
+#endif
 
 void onSwitchLongEnterPress(const char * result);
 void onSourceLongEnterPress(const char * result);

@@ -19,7 +19,7 @@
  * GNU General Public License for more details.
  */
 
-#include "opentx.h"
+#include "edgetx.h"
 
 enum SpanishPrompts {
   ES_PROMPT_NUMBERS_BASE = 0,
@@ -72,7 +72,7 @@ enum SpanishPrompts {
 
 };
 
-#define ES_PUSH_UNIT_PROMPT(u) es_pushUnitPrompt((u), id)
+#define ES_PUSH_UNIT_PROMPT(u) es_pushUnitPrompt((u), id, fragmentVolume)
 
 I18N_PLAY_FUNCTION(es, pushUnitPrompt, uint8_t unitprompt)
 {

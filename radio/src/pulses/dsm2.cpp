@@ -23,7 +23,7 @@
 #include "hal/module_port.h"
 #include "mixer_scheduler.h"
 
-#include "opentx.h"
+#include "edgetx.h"
 #include "telemetry/spektrum.h"
 
 #define DSM2_SEND_BIND                     (1 << 7)
@@ -37,50 +37,67 @@
 #define BAD_DATA             0x47
 
 #define DSM2_BITRATE         125000
+#define DSM2_FRAME_SIZE      14
+
+static bool _bind_restart = false;
 
 static inline void sendByte(uint8_t*& p_buf, uint8_t b)
 {
   *p_buf++ = b;
 }
 
-static void setupPulsesDSM2(uint8_t module, uint8_t*& p_buf)
+static void setupPulsesDSM2(uint8_t module, uint8_t type, uint8_t*& p_buf)
 {
-  uint8_t dsmDat[14];
+  uint8_t dsmDat[DSM2_FRAME_SIZE];
 
-  switch (moduleState[module].protocol) {
-    case PROTOCOL_CHANNELS_DSM2_LP45:
+  switch (type) {
+    case DSM2_PROTO_LP45:
       dsmDat[0] = 0x00;
       break;
-    case PROTOCOL_CHANNELS_DSM2_DSM2:
+    case DSM2_PROTO_DSM2:
       dsmDat[0] = 0x10;
       break;
-    default: // DSMX
+    default: // DSM2_PROTO_DSMX
       dsmDat[0] = 0x10 | DSMX_BIT;
       break;
   }
 
   if (moduleState[module].mode == MODULE_MODE_BIND) {
+
+    // The module is set to OFF during one second,
+    // before BIND starts. It will start with bind packets
+    // directly after restarts.
+    if (!_bind_restart) {
+      _bind_restart = true;
+      // approx 1.1s @ 22ms cycle
+      restartModuleAsync(module, 50);
+    }
+    
     dsmDat[0] |= DSM2_SEND_BIND;
+  } else {
+    _bind_restart = false;
   }
-  else if (moduleState[module].mode == MODULE_MODE_RANGECHECK) {
+
+  if (moduleState[module].mode == MODULE_MODE_RANGECHECK) {
     dsmDat[0] |= DSM2_SEND_RANGECHECK;
   }
 
   dsmDat[1] = g_model.header.modelId[module]; // DSM2 Header second byte for model match
 
-  for (int i=0; i<DSM2_CHANS; i++) {
-    int channel = g_model.moduleData[module].channelsStart+i;
-    int value = channelOutputs[channel] + 2*PPM_CH_CENTER(channel) - 2*PPM_CENTER;
-    uint16_t pulse = limit(0, ((value*13)>>5)+512, 1023);
-    dsmDat[2+2*i] = (i<<2) | ((pulse>>8)&0x03);
-    dsmDat[3+2*i] = pulse & 0xff;
+  for (int i = 0; i < DSM2_CHANS; i++) {
+    int channel = g_model.moduleData[module].channelsStart + i;
+    int value =
+        channelOutputs[channel] + 2 * PPM_CH_CENTER(channel) - 2 * PPM_CENTER;
+
+    uint16_t pulse = limit(0, ((value * 13) >> 5) + 512, 1023);
+    dsmDat[2 + 2 * i] = (i << 2) | ((pulse >> 8) & 0x03);
+    dsmDat[3 + 2 * i] = pulse & 0xff;
   }
 
-  for (int i=0; i<14; i++) {
+  for (int i = 0; i < DSM2_FRAME_SIZE; i++) {
     sendByte(p_buf, dsmDat[i]);
   }
 }
-
 
 #define DSMP_BITRATE 115200
 
@@ -178,42 +195,37 @@ const etx_serial_init dsmUartParams = {
     .polarity = ETX_Pol_Inverted,
 };
 
-static void* dsmInit(uint8_t module, uint32_t baudrate,  uint16_t period, bool telemetry)
+static etx_module_state_t* dsmInit(uint8_t module, uint32_t baudrate,
+                                   uint16_t period, bool telemetry)
 {
   // only external module supported
   if (module == INTERNAL_MODULE) return nullptr;
 
   etx_serial_init params(dsmUartParams);
   params.baudrate = baudrate;
-  auto mod_st = modulePortInitSerial(module, ETX_MOD_PORT_UART, &params);
-  if (!mod_st) {
-    // inverted soft-serial fallback
-    mod_st = modulePortInitSerial(module, ETX_MOD_PORT_SOFT_INV, &params);
-    if (!mod_st) return nullptr;
-  }
+  auto mod_st = modulePortInitSerial(module, ETX_MOD_PORT_UART, &params, true);
+  if (!mod_st) return nullptr;
 
   if (telemetry) {
     params.direction = ETX_Dir_RX;
-    if (!modulePortInitSerial(module, ETX_MOD_PORT_SPORT, &params)) {
-      // inverted soft-serial fallback
-      modulePortInitSerial(module, ETX_MOD_PORT_SPORT_INV, &params);
-    }
+    modulePortInitSerial(module, ETX_MOD_PORT_SPORT, &params, true);
   }
 
   mixerSchedulerSetPeriod(module, period);
-  return (void*)mod_st;
+  return mod_st;
 }
 
 static void* dsm2Init(uint8_t module)
 {
-  return dsmInit(module, DSM2_BITRATE, DSM2_PERIOD, false);
+  auto mod_st = dsmInit(module, DSM2_BITRATE, DSM2_PERIOD, false);
+  mod_st->user_data = (void*)(uintptr_t)g_model.moduleData[module].subType;
+  return (void*)mod_st;
 }
 
 static void* dsmpInit(uint8_t module)
 {
-  return dsmInit(module, DSMP_BITRATE, 11 * 1000 /* 11ms in us */, true);
+  return (void*)dsmInit(module, DSMP_BITRATE, 11 * 1000 /* 11ms in us */, true);
 }
-
 
 static void dsmDeInit(void* ctx)
 {
@@ -236,10 +248,23 @@ static void dsm2SendPulses(void* ctx, uint8_t* buffer, int16_t* channels, uint8_
 
   auto mod_st = (etx_module_state_t*)ctx;
   auto module = modulePortGetModule(mod_st);
+  auto type = (uint8_t)(uintptr_t)mod_st->user_data;
 
   auto p_data = buffer;
-  setupPulsesDSM2(module, p_data);
+  setupPulsesDSM2(module, type, p_data);
   _dsm_send(mod_st, buffer, p_data - buffer);
+}
+
+static void dsm2ConfigChange(void* ctx)
+{
+  auto mod_st = (etx_module_state_t*)ctx;
+  auto module = modulePortGetModule(mod_st);
+  auto type = (uint8_t)(uintptr_t)mod_st->user_data;
+
+  if (type != g_model.moduleData[module].subType) {
+    // restart during next mixer cycle
+    restartModuleAsync(module, 0);    
+  }
 }
 
 static void dsmpSendPulses(void* ctx, uint8_t* buffer, int16_t* channels, uint8_t nChannels)
@@ -266,11 +291,13 @@ static void dsmpProcessData(void* ctx, uint8_t data, uint8_t* buffer, uint8_t* l
 
 // No telemetry
 const etx_proto_driver_t DSM2Driver = {
-  .protocol = PROTOCOL_CHANNELS_DSM2_LP45,
+  .protocol = PROTOCOL_CHANNELS_DSM2,
   .init = dsm2Init,
   .deinit = dsmDeInit,
   .sendPulses = dsm2SendPulses,
   .processData = nullptr,
+  .processFrame = nullptr,
+  .onConfigChange = dsm2ConfigChange,
 };
 
 const etx_proto_driver_t DSMPDriver = {
@@ -279,4 +306,6 @@ const etx_proto_driver_t DSMPDriver = {
   .deinit = dsmDeInit,
   .sendPulses = dsmpSendPulses,
   .processData = dsmpProcessData,
+  .processFrame = nullptr,
+  .onConfigChange = nullptr,
 };

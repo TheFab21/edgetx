@@ -1,7 +1,8 @@
 /*
- * Copyright (C) OpenTX
+ * Copyright (C) EdgeTX
  *
  * Based on code named
+ *   opentx - https://github.com/opentx/opentx
  *   th9x - http://code.google.com/p/th9x
  *   er9x - http://code.google.com/p/er9x
  *   gruvin9x - http://code.google.com/p/gruvin9x
@@ -29,13 +30,15 @@
 #include "checklistdialog.h"
 #include "helpers.h"
 #include "moduledata.h"
+#include "namevalidator.h"
 
 #include <QDir>
 
 constexpr char FIM_TIMERSWITCH[] {"Timer Switch"};
 constexpr char FIM_THRSOURCE[]   {"Throttle Source"};
-constexpr char FIM_TRAINERMODE[] {"Trainer Mode"};
+// constexpr char FIM_TRAINERMODE[] {"Trainer Mode"};
 constexpr char FIM_ANTENNAMODE[] {"Antenna Mode"};
+constexpr char FIM_HATSMODE[]    {"Hats Mode"};
 
 TimerPanel::TimerPanel(QWidget * parent, ModelData & model, TimerData & timer, GeneralSettings & generalSettings, Firmware * firmware,
                        QWidget * prevFocus, FilteredItemModelFactory * panelFilteredModels, CompoundItemModelFactory * panelItemModels):
@@ -54,6 +57,7 @@ TimerPanel::TimerPanel(QWidget * parent, ModelData & model, TimerData & timer, G
   if (length == 0)
     ui->name->hide();
   else {
+    ui->name->setValidator(new NameValidator(firmware->getBoard(), this));
     ui->name->setField(timer.name, length, this);
     connect(ui->name, SIGNAL(currentDataChanged()), this, SLOT(onNameChanged()));
   }
@@ -195,6 +199,7 @@ void TimerPanel::onModeChanged(int index)
 {
   timer.modeChanged();
   update();
+  emit modeChanged();
 }
 
 /******************************************************************************/
@@ -224,6 +229,7 @@ void TimerPanel::onModeChanged(int index)
 #define MASK_MULTI_DSM_OPT         (1<<19)
 #define MASK_CHANNELMAP            (1<<20)
 #define MASK_MULTI_BAYANG_OPT      (1<<21)
+#define MASK_AFHDS                 (1<<22)
 
 quint8 ModulePanel::failsafesValueDisplayType = ModulePanel::FAILSAFE_DISPLAY_PERCENT;
 
@@ -232,27 +238,27 @@ ModulePanel::ModulePanel(QWidget * parent, ModelData & model, ModuleData & modul
   ModelPanel(parent, model, generalSettings, firmware),
   module(module),
   moduleIdx(moduleIdx),
-  ui(new Ui::Module)
+  ui(new Ui::Module),
+  trainerModeItemModel(nullptr)
 {
   lock = true;
 
   ui->setupUi(this);
 
   ui->label_module->setText(ModuleData::indexToString(moduleIdx, firmware));
-  if (moduleIdx < 0) {
+  if (isTrainerModule(moduleIdx)) {
     ui->formLayout_col1->setSpacing(0);
     if (!IS_HORUS_OR_TARANIS(firmware->getBoard())) {
       ui->label_trainerMode->hide();
       ui->trainerMode->hide();
     }
     else {
-      if (panelFilteredItemModels)
-        ui->trainerMode->setModel(panelFilteredItemModels->getItemModel(FIM_TRAINERMODE));
+      updateTrainerModeItemModel();
       ui->trainerMode->setField(model.trainerMode);
       connect(ui->trainerMode, &AutoComboBox::currentDataChanged, this, [=] () {
-              update();
-              emit updateItemModels();
-              emit modified();
+        update();
+        emit updateItemModels();
+        emit modified();
       });
     }
   }
@@ -262,16 +268,16 @@ ModulePanel::ModulePanel(QWidget * parent, ModelData & model, ModuleData & modul
   }
 
   if (panelFilteredItemModels) {
-    if (moduleIdx >= 0) {
+    if (!isTrainerModule(moduleIdx)) {
       int id = panelFilteredItemModels->registerItemModel(new FilteredItemModel(ModuleData::protocolItemModel(generalSettings), moduleIdx + 1/*flag cannot be 0*/), QString("Module Protocol %1").arg(moduleIdx));
       panelFilteredItemModels->getItemModel(id)->setSortCaseSensitivity(Qt::CaseInsensitive);
       panelFilteredItemModels->getItemModel(id)->sort(0);
       ui->protocol->setModel(panelFilteredItemModels->getItemModel(id));
 
       if (ui->protocol->findData(module.protocol) < 0) {
-        const QString moduleIdxDesc = moduleIdx == 0 ? tr("internal") : tr("external");
-        const QString compareDesc = moduleIdx == 0 ? tr("hardware") : tr("profile");
-        const QString intModuleDesc = moduleIdx == 0 ? ModuleData::typeToString(generalSettings.internalModule) : "";
+        const QString moduleIdxDesc = isInternalModule(moduleIdx) ? tr("internal") : tr("external");
+        const QString compareDesc = isInternalModule(moduleIdx) ? tr("hardware") : tr("profile");
+        const QString intModuleDesc = isInternalModule(moduleIdx) ? ModuleData::typeToString(generalSettings.internalModule) : "";
         QString msg = tr("Warning: The %1 module protocol <b>%2</b> is incompatible with the <b>%3 %1 module %4</b> and has been set to <b>OFF</b>!");
         msg = msg.arg(moduleIdxDesc).arg(module.protocolToString(module.protocol)).arg(compareDesc).arg(intModuleDesc);
 
@@ -290,7 +296,7 @@ ModulePanel::ModulePanel(QWidget * parent, ModelData & model, ModuleData & modul
       ui->protocol->setField(module.protocol, this);
     }
 
-    if (moduleIdx == 0) {
+    if (isInternalModule(moduleIdx)) {
       int id = panelFilteredItemModels->registerItemModel(new FilteredItemModel(GeneralSettings::antennaModeItemModel(true)), FIM_ANTENNAMODE);
       ui->antennaMode->setModel(panelFilteredItemModels->getItemModel(id));
     }
@@ -314,14 +320,37 @@ ModulePanel::ModulePanel(QWidget * parent, ModelData & model, ModuleData & modul
   connect(ui->multiSubType, static_cast<void(QComboBox::*)(int)>(&QComboBox::currentIndexChanged), this, &ModulePanel::onSubTypeChanged);
   connect(ui->multiProtocol, static_cast<void(QComboBox::*)(int)>(&QComboBox::currentIndexChanged), this, &ModulePanel::onMultiProtocolChanged);
   connect(this, &ModulePanel::channelsRangeChanged, this, &ModulePanel::setupFailsafes);
-  connect(ui->btnGrpValueType, static_cast<void(QButtonGroup::*)(int)>(&QButtonGroup::buttonClicked), this, &ModulePanel::onFailsafesDisplayValueTypeChanged);
+  connect(ui->btnGrpValueType, static_cast<void(QButtonGroup::*)(int)>(&QButtonGroup::idClicked), this, &ModulePanel::onFailsafesDisplayValueTypeChanged);
   connect(ui->rxFreq, static_cast<void(QSpinBox::*)(int)>(&QSpinBox::valueChanged), this, &ModulePanel::onRfFreqChanged);
   connect(ui->clearRx1, SIGNAL(clicked()), this, SLOT(onClearAccessRxClicked()));
   connect(ui->clearRx2, SIGNAL(clicked()), this, SLOT(onClearAccessRxClicked()));
   connect(ui->clearRx3, SIGNAL(clicked()), this, SLOT(onClearAccessRxClicked()));
+  connect(ui->cboAfhdsOpt1, static_cast<void(QComboBox::*)(int)>(&QComboBox::currentIndexChanged), [=] (int index)
+    {
+      if (lock)
+        return;
+
+      if (this->module.protocol == PULSES_FLYSKY_AFHDS2A)
+        Helpers::setBitmappedValue(this->module.flysky.mode, ui->cboAfhdsOpt1->currentData().toInt(), 1);
+      else
+        this->module.afhds3.phyMode = ui->cboAfhdsOpt1->currentData().toInt();
+
+      emit modified();
+    });
+  connect(ui->cboAfhdsOpt2, static_cast<void(QComboBox::*)(int)>(&QComboBox::currentIndexChanged), [=] (int index)
+    {
+      if (lock)
+        return;
+
+      if (this->module.protocol == PULSES_FLYSKY_AFHDS2A)
+        Helpers::setBitmappedValue(this->module.flysky.mode, ui->cboAfhdsOpt2->currentData().toInt(), 0);
+      else
+        this->module.afhds3.emi = ui->cboAfhdsOpt2->currentData().toInt();
+
+      emit modified();
+    });
 
   lock = false;
-
 }
 
 ModulePanel::~ModulePanel()
@@ -433,7 +462,7 @@ void ModulePanel::update()
   unsigned int mask = 0;
   unsigned int max_rx_num = 63;
 
-  if (moduleIdx >= 0) {
+  if (!isTrainerModule(moduleIdx)) {
     mask |= MASK_PROTOCOL;
     switch (protocol) {
       case PULSES_PXX_R9M:
@@ -460,7 +489,7 @@ void ModulePanel::update()
         else if (protocol==PULSES_ACCESS_ISRM || protocol==PULSES_ACCESS_R9M ||
                  protocol==PULSES_ACCESS_R9M_LITE || protocol==PULSES_ACCESS_R9M_LITE_PRO)
           mask |= MASK_RX_NUMBER | MASK_ACCESS;
-        if (moduleIdx == 0 &&
+        if (isInternalModule(moduleIdx) &&
             (protocol==PULSES_PXX_XJT_X16 ||
              protocol==PULSES_PXX_XJT_D8 || protocol==PULSES_PXX_XJT_LR12) &&
             HAS_EXTERNAL_ANTENNA(board) && generalSettings.antennaMode == GeneralSettings::ANTENNA_MODE_PER_MODEL)
@@ -528,10 +557,10 @@ void ModulePanel::update()
         if (pdef.disableChannelMap)
           mask |= MASK_CHANNELMAP;
         break;
-      case PULSES_AFHDS3:
-        module.channelsCount = 18;
-        mask |= MASK_CHANNELS_RANGE| MASK_CHANNELS_COUNT | MASK_FAILSAFES;
-        mask |= MASK_SUBTYPES | MASK_RX_FREQ | MASK_RF_POWER;
+      case PULSES_FLYSKY_AFHDS3:
+        mask |= MASK_RX_NUMBER;
+      case PULSES_FLYSKY_AFHDS2A:
+        mask |= MASK_CHANNELS_RANGE| MASK_CHANNELS_COUNT | MASK_FAILSAFES | MASK_AFHDS;
         break;
       case PULSES_LEMON_DSMP:
         mask |= MASK_CHANNELS_RANGE;
@@ -539,6 +568,9 @@ void ModulePanel::update()
       default:
         break;
     }
+
+    if (protocol != PULSES_MULTIMODULE && module.hasFailsafes(firmware))
+      mask |= MASK_FAILSAFES;
   }
   else if (IS_HORUS_OR_TARANIS(board)) {
     if (model->trainerMode == TRAINER_MODE_SLAVE_JACK) {
@@ -548,11 +580,8 @@ void ModulePanel::update()
   else if (model->trainerMode != TRAINER_MODE_MASTER_JACK) {
     mask |= MASK_PPM_FIELDS | MASK_CHANNELS_RANGE | MASK_CHANNELS_COUNT;
   }
-  else if (module.hasFailsafes(firmware)) {
-    mask |= MASK_FAILSAFES;
-  }
 
-  if (moduleIdx > 0)
+  if (isExternalModule(moduleIdx))
     ui->telemetryBaudrate->setVisible(mask & MASK_BAUDRATE);
   else
     ui->telemetryBaudrate->setVisible(false);
@@ -637,9 +666,6 @@ void ModulePanel::update()
       if (firmware->getCapability(HasModuleR9MFlex))
         i = 2;
       break;
-    case PULSES_AFHDS3:
-        numEntries = 4;
-        break;
     case PULSES_PPM:
         numEntries = PPM_NUM_SUBTYPES;
         break;
@@ -754,11 +780,33 @@ void ModulePanel::update()
   ui->clearRx3->setVisible((mask & MASK_ACCESS) && (module.access.receivers & (1 << 2)));
   ui->rx3->setVisible((mask & MASK_ACCESS) && (module.access.receivers & (1 << 2)));
 
+  // AFHFS
+  if (mask & MASK_AFHDS) {
+    if (protocol == PULSES_FLYSKY_AFHDS2A) {
+      ui->label_afhds->setText(tr("Options"));
+      ui->cboAfhdsOpt1->setModel(ModuleData::afhds2aMode1ItemModel());
+      ui->cboAfhdsOpt1->setCurrentIndex(Helpers::getBitmappedValue(module.flysky.mode, 1));
+
+      ui->cboAfhdsOpt2->setModel(ModuleData::afhds2aMode2ItemModel());
+      ui->cboAfhdsOpt2->setCurrentIndex(Helpers::getBitmappedValue(module.flysky.mode, 0));
+    }
+    else {
+      ui->label_afhds->setText(tr("Type"));
+      ui->cboAfhdsOpt1->setModel(ModuleData::afhds3PhyModeItemModel());
+      ui->cboAfhdsOpt1->setCurrentIndex(ui->cboAfhdsOpt1->findData(module.afhds3.phyMode));
+
+      ui->cboAfhdsOpt2->setModel(ModuleData::afhds3EmiItemModel());
+      ui->cboAfhdsOpt2->setCurrentIndex(ui->cboAfhdsOpt2->findData(module.afhds3.emi));
+    }
+  }
+
+  ui->label_afhds->setVisible(mask & MASK_AFHDS);
+  ui->cboAfhdsOpt1->setVisible(mask & MASK_AFHDS);
+  ui->cboAfhdsOpt2->setVisible(mask & MASK_AFHDS);
+
   // Failsafes
   ui->label_failsafeMode->setVisible(mask & MASK_FAILSAFES);
   ui->failsafeMode->setVisible(mask & MASK_FAILSAFES);
-  //hide reciever mode for afhds3
-  qobject_cast<QListView *>(ui->failsafeMode->view())->setRowHidden(FAILSAFE_RECEIVER, protocol == PULSES_AFHDS3);
 
   if ((mask & MASK_FAILSAFES) && module.failsafeMode == FAILSAFE_CUSTOM) {
     if (ui->failsafesGroupBox->isHidden()) {
@@ -812,7 +860,14 @@ void ModulePanel::onProtocolChanged(int index)
         ui->telemetryBaudrate->setCurrentIndex(1);
       }
     }
+    else if (module.protocol == PULSES_FLYSKY_AFHDS2A) {
+      module.flysky.setDefault();
+    }
+    else if (module.protocol == PULSES_FLYSKY_AFHDS3) {
+      module.afhds3.setDefault();
+    }
 
+    emit protocolChanged();
     emit updateItemModels();
     emit modified();
   }
@@ -830,7 +885,11 @@ void ModulePanel::on_r9mPower_currentIndexChanged(int index)
 {
   if (!lock) {
 
-    if (module.protocol == PULSES_AFHDS3 && module.afhds3.rfPower != (unsigned int)index) {
+    if (module.protocol == PULSES_FLYSKY_AFHDS2A && module.flysky.rfPower != (unsigned int)index) {
+      module.flysky.rfPower = index;
+      emit modified();
+    }
+    else if (module.protocol == PULSES_FLYSKY_AFHDS3 && module.afhds3.rfPower != (unsigned int)index) {
       module.afhds3.rfPower = index;
       emit modified();
     }
@@ -976,19 +1035,17 @@ void ModulePanel::onSubTypeChanged()
   if (!lock && module.subType != type) {
     lock=true;
     module.subType = type;
-    if (module.protocol != PULSES_AFHDS3) {
-      update();
-    }
     emit modified();
     lock =  false;
   }
 }
 
 void ModulePanel::onRfFreqChanged(int freq) {
-  if (module.afhds3.rxFreq != (unsigned int)freq) {
-    module.afhds3.rxFreq = (unsigned int)freq;
-    emit modified();
-  }
+  //  TODO fix for AFHDS2A
+  //if (module.afhds3.rxFreq != (unsigned int)freq) {
+  //  module.afhds3.rxFreq = (unsigned int)freq;
+  //  emit modified();
+  //}
 }
 
 void ModulePanel::on_disableTelem_stateChanged(int state)
@@ -1177,21 +1234,63 @@ void ModulePanel::onClearAccessRxClicked()
   }
 }
 
+void ModulePanel::updateTrainerModeItemModel()
+{
+  if (isTrainerModule(moduleIdx)) {
+    if (trainerModeItemModel)
+      delete trainerModeItemModel;
+
+    trainerModeItemModel = new FilteredItemModel(model->trainerModeItemModel(generalSettings, firmware));
+    ui->trainerMode->setModel(trainerModeItemModel);
+    ui->trainerMode->updateValue();
+  }
+}
+
 /******************************************************************************/
+
+bool FilteredGroupSwitchesModel::filterAcceptsRow(int sourceRow, const QModelIndex & sourceParent) const
+{
+  if (sourceRow == 0) return true;
+  if (sourceRow == m_switchcnt + 1) {
+    if (m_model->getFuncSwitchAlwaysOnGroup(m_group) || m_model->getFuncGroupSwitchCount(m_group, m_switchcnt) == 0)
+      return false;
+    return true;
+  }
+  if ((int)m_model->getFuncSwitchGroup(sourceRow - 1) == m_group)
+    return true;
+  return false;
+}
+
+bool FilteredSwitchGroupsModel::filterAcceptsRow(int sourceRow, const QModelIndex & sourceParent) const
+{
+  if (sourceRow == 0) return true;
+  if (m_model->getFuncSwitchConfig(m_switch) == ModelData::FUNC_SWITCH_CONFIG_NONE) return false;
+  return true;
+}
+
+bool FilteredSwitchConfigsModel::filterAcceptsRow(int sourceRow, const QModelIndex & sourceParent) const
+{
+  if (sourceRow == ModelData::FUNC_SWITCH_CONFIG_NONE || sourceRow == ModelData::FUNC_SWITCH_CONFIG_2POS) return true;
+  return !m_model->getFuncSwitchAlwaysOnGroupForSwitch(m_switch);
+}
+
 FunctionSwitchesPanel::FunctionSwitchesPanel(QWidget * parent, ModelData & model, GeneralSettings & generalSettings, Firmware * firmware):
   ModelPanel(parent, model, generalSettings, firmware),
   ui(new Ui::FunctionSwitches)
 {
   ui->setupUi(this);
 
-  AbstractStaticItemModel *fsConfig = ModelData::funcSwitchConfigItemModel();
+  fsConfig = ModelData::funcSwitchConfigItemModel();
   AbstractStaticItemModel *fsStart = ModelData::funcSwitchStartItemModel();
+  AbstractStaticItemModel *fsGroups = ModelData::funcSwitchGroupsModel();
+
+  Board::Type board = firmware->getBoard();
 
   lock = true;
 
-  QRegExp rx(CHAR_FOR_NAMES_REGEX);
+  switchcnt = Boards::getCapability(board, Board::FunctionSwitches);
 
-  switchcnt = Boards::getCapability(firmware->getBoard(), Board::FunctionSwitches);
+  fsGroupStart = ModelData::funcSwitchGroupStartSwitchModel(switchcnt);
 
   for (int i = 0; i < switchcnt; i++) {
     QLabel * lblSwitchId = new QLabel(this);
@@ -1199,24 +1298,24 @@ FunctionSwitchesPanel::FunctionSwitchesPanel(QWidget * parent, ModelData & model
 
     AutoLineEdit * aleName = new AutoLineEdit(this);
     aleName->setProperty("index", i);
-    aleName->setValidator(new QRegExpValidator(rx, this));
+    aleName->setValidator(new NameValidator(board, this));
     aleName->setField((char *)model.functionSwitchNames[i], 3);
 
     QComboBox * cboConfig = new QComboBox(this);
     cboConfig->setProperty("index", i);
-    cboConfig->setModel(fsConfig);
+    auto configFilter = new FilteredSwitchConfigsModel(fsConfig, i, &model);
+    cboConfig->setModel(configFilter);
+    filterSwitchConfigs << configFilter;
 
     QComboBox * cboStartPosn = new QComboBox(this);
     cboStartPosn->setProperty("index", i);
     cboStartPosn->setModel(fsStart);
 
-    QSpinBox * sbGroup = new QSpinBox(this);
-    sbGroup->setProperty("index", i);
-    sbGroup->setMaximum(3);
-    sbGroup->setSpecialValueText("-");
-
-    QCheckBox * cbAlwaysOnGroup = new QCheckBox(this);
-    cbAlwaysOnGroup->setProperty("index", i);
+    QComboBox * cboGroup = new QComboBox(this);
+    cboGroup->setProperty("index", i);
+    auto groupFilter = new FilteredSwitchGroupsModel(fsGroups, i, &model);
+    cboGroup->setModel(groupFilter);
+    filterSwitchGroups << groupFilter;
 
     int row = 0;
     int coloffset = 1;
@@ -1224,20 +1323,43 @@ FunctionSwitchesPanel::FunctionSwitchesPanel(QWidget * parent, ModelData & model
     ui->gridSwitches->addWidget(aleName, row++, i + coloffset);
     ui->gridSwitches->addWidget(cboConfig, row++, i + coloffset);
     ui->gridSwitches->addWidget(cboStartPosn, row++, i + coloffset);
-    ui->gridSwitches->addWidget(sbGroup, row++, i + coloffset);
-    ui->gridSwitches->addWidget(cbAlwaysOnGroup, row++, i + coloffset);
+    ui->gridSwitches->addWidget(cboGroup, row++, i + coloffset);
 
     connect(aleName, &AutoLineEdit::currentDataChanged, this, &FunctionSwitchesPanel::on_nameEditingFinished);
     connect(cboConfig, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &FunctionSwitchesPanel::on_configCurrentIndexChanged);
     connect(cboStartPosn, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &FunctionSwitchesPanel::on_startPosnCurrentIndexChanged);
-    connect(sbGroup, QOverload<int>::of(&QSpinBox::valueChanged), this, &FunctionSwitchesPanel::on_groupChanged);
-    connect(cbAlwaysOnGroup, &QCheckBox::toggled, this, &FunctionSwitchesPanel::on_alwaysOnGroupChanged);
+    connect(cboGroup, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &FunctionSwitchesPanel::on_groupChanged);
 
     aleNames << aleName;
     cboConfigs << cboConfig;
     cboStartupPosns << cboStartPosn;
-    sbGroups << sbGroup;
+    cboGroups << cboGroup;
+  }
+
+  for (int i = 0; i < 3; i += 1) {
+    QLabel * lblGroupId = new QLabel(this);
+    lblGroupId->setText(tr("Group %1").arg(i + 1));
+
+    QCheckBox * cbAlwaysOnGroup = new QCheckBox(this);
+    cbAlwaysOnGroup->setProperty("index", i);
+
+    QComboBox * cboStartPosn = new QComboBox(this);
+    cboStartPosn->setProperty("index", i);
+    auto filter = new FilteredGroupSwitchesModel(fsGroupStart, i + 1, &model, switchcnt);
+    cboStartPosn->setModel(filter);
+    filterGroupSwitches << filter;
+
+    int row = 0;
+    int coloffset = 1;
+    ui->gridGroups->addWidget(lblGroupId, row++, i + coloffset);
+    ui->gridGroups->addWidget(cbAlwaysOnGroup, row++, i + coloffset);
+    ui->gridGroups->addWidget(cboStartPosn, row++, i + coloffset);
+
+    connect(cbAlwaysOnGroup, &QCheckBox::toggled, this, &FunctionSwitchesPanel::on_alwaysOnGroupChanged);
+    connect(cboStartPosn, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &FunctionSwitchesPanel::on_groupStartPosnCurrentIndexChanged);
+
     cbAlwaysOnGroups << cbAlwaysOnGroup;
+    cboGroupStartupPosns << cboStartPosn;
   }
 
   update();
@@ -1252,37 +1374,30 @@ FunctionSwitchesPanel::~FunctionSwitchesPanel()
 
 void FunctionSwitchesPanel::update()
 {
-  for (int i = 0; i < switchcnt; i++) {
-    update(i);
-  }
-}
-
-void FunctionSwitchesPanel::update(int index)
-{
   lock = true;
 
   for (int i = 0; i < switchcnt; i++) {
+    filterSwitchConfigs[i]->invalidate();
+    filterSwitchGroups[i]->invalidate();
+
     aleNames[i]->update();
-    cboConfigs[i]->setCurrentIndex(model->getFuncSwitchConfig(i));
+    cboConfigs[i]->setCurrentIndex(filterSwitchConfigs[i]->mapFromSource(fsConfig->index(model->getFuncSwitchConfig(i), 0)).row());
     cboStartupPosns[i]->setCurrentIndex(model->getFuncSwitchStart(i));
     unsigned int grp = model->getFuncSwitchGroup(i);
-    sbGroups[i]->setValue(grp);
-    cbAlwaysOnGroups[i]->setChecked(model->getFuncSwitchAlwaysOnGroup(i));
+    cboGroups[i]->setCurrentIndex(grp);
 
-    if (cboConfigs[i]->currentIndex() < 2)
-      cboStartupPosns[i]->setEnabled(false);
-    else
-      cboStartupPosns[i]->setEnabled(true);
+    cboStartupPosns[i]->setEnabled(cboConfigs[i]->currentIndex() >= ModelData::FUNC_SWITCH_CONFIG_2POS && (grp == 0));
 
-    if (cboConfigs[i]->currentIndex() < 1)
-      sbGroups[i]->setEnabled(false);
-    else
-      sbGroups[i]->setEnabled(true);
+    cboGroups[i]->setEnabled(cboConfigs[i]->currentIndex() >= ModelData::FUNC_SWITCH_CONFIG_TOGGLE);
+  }
 
-    if (!(sbGroups[i]->isEnabled()) || grp < 1)
-      cbAlwaysOnGroups[i]->setEnabled(false);
-    else
-      cbAlwaysOnGroups[i]->setEnabled(true);
+  for (int i = 0; i < 3; i += 1) {
+    filterGroupSwitches[i]->invalidate();
+
+    model->setGroupSwitchState(i + 1, switchcnt);
+
+    cbAlwaysOnGroups[i]->setChecked(model->getFuncSwitchAlwaysOnGroup(i + 1));
+    cboGroupStartupPosns[i]->setCurrentIndex(filterGroupSwitches[i]->mapFromSource(fsGroupStart->index(model->getFuncGroupSwitchStart(i + 1, switchcnt), 0)).row());
   }
 
   lock = false;
@@ -1304,14 +1419,16 @@ void FunctionSwitchesPanel::on_configCurrentIndexChanged(int index)
   if (cb && !lock) {
     lock = true;
     bool ok = false;
-    unsigned int i = sender()->property("index").toInt(&ok);
-      if (ok && model->getFuncSwitchConfig(i) != (unsigned int)index) {
-        model->setFuncSwitchConfig(i, index);
-      if (index < 2)
-          model->setFuncSwitchStart(i, ModelData::FUNC_SWITCH_START_INACTIVE);
-      if (index < 1)
-          model->setFuncSwitchGroup(i, 0);
-      update(i);
+    unsigned int sw = sender()->property("index").toInt(&ok);
+    unsigned int config = filterSwitchConfigs[sw]->mapToSource(filterSwitchConfigs[sw]->index(index, 0)).row();
+    if (ok && model->getFuncSwitchConfig(sw) != config) {
+      model->setFuncSwitchConfig(sw, config);
+      if (config != ModelData::FUNC_SWITCH_CONFIG_2POS) {
+        model->setFuncSwitchStart(sw, ModelData::FUNC_SWITCH_START_PREVIOUS);
+        if ((config == ModelData::FUNC_SWITCH_CONFIG_NONE) || model->getFuncSwitchAlwaysOnGroupForSwitch(sw))
+          model->setFuncSwitchGroup(sw, 0);
+      }
+      update();
       emit modified();
       emit updateDataModels();
      }
@@ -1329,9 +1446,31 @@ void FunctionSwitchesPanel::on_startPosnCurrentIndexChanged(int index)
   if (cb && !lock) {
     lock = true;
     bool ok = false;
-    unsigned int i = sender()->property("index").toInt(&ok);
-    if (ok && model->getFuncSwitchStart(i) != (unsigned int)index) {
-      model->setFuncSwitchStart(i, index);
+    unsigned int sw = sender()->property("index").toInt(&ok);
+    if (ok && model->getFuncSwitchStart(sw) != (unsigned int)index) {
+      model->setFuncSwitchStart(sw, index);
+      update();
+      emit modified();
+    }
+    lock = false;
+  }
+}
+
+void FunctionSwitchesPanel::on_groupStartPosnCurrentIndexChanged(int index)
+{
+  if (!sender())
+    return;
+
+  QComboBox * cb = qobject_cast<QComboBox *>(sender());
+
+  if (cb && !lock) {
+    lock = true;
+    bool ok = false;
+    unsigned int grp = sender()->property("index").toInt(&ok);
+    unsigned int sw = filterGroupSwitches[grp]->mapToSource(filterGroupSwitches[grp]->index(index, 0)).row();
+    if (ok && model->getFuncGroupSwitchStart(grp + 1, switchcnt) != sw) {
+      model->setFuncGroupSwitchStart(grp + 1, sw, switchcnt);
+      update();
       emit modified();
     }
     lock = false;
@@ -1343,16 +1482,29 @@ void FunctionSwitchesPanel::on_groupChanged(int value)
   if (!sender())
     return;
 
-  QSpinBox * sb = qobject_cast<QSpinBox *>(sender());
+  QComboBox * cb = qobject_cast<QComboBox *>(sender());
 
-  if (sb && !lock) {
+  if (cb && !lock) {
     lock = true;
     bool ok = false;
-    int i = sender()->property("index").toInt(&ok);
-    if (ok && model->getFuncSwitchGroup(i) != (unsigned int)value) {
-      model->setFuncSwitchGroup(i, (unsigned int)value);
-      update(i);
+    int sw = sender()->property("index").toInt(&ok);
+    unsigned int grp = filterSwitchGroups[sw]->mapToSource(filterSwitchGroups[sw]->index(value, 0)).row();
+    if (ok && model->getFuncSwitchGroup(sw) != grp) {
+      unsigned oldGrp = model->getFuncSwitchGroup(sw);
+      if (model->getFuncSwitchAlwaysOnGroup(grp)) {
+        if (model->getFuncSwitchConfig(sw) == ModelData::FUNC_SWITCH_CONFIG_TOGGLE)
+          model->setFuncSwitchConfig(sw, ModelData::FUNC_SWITCH_CONFIG_2POS);
+      }
+      if ((grp == 0) || (model->getFuncGroupSwitchStart(grp, switchcnt) == 0))
+        model->setFuncSwitchStart(sw, ModelData::FUNC_SWITCH_START_PREVIOUS);
+      else
+        model->setFuncSwitchStart(sw, ModelData::FUNC_SWITCH_START_OFF);
+      model->setFuncSwitchGroup(sw, grp);
+      if (oldGrp > 0)
+        model->setFuncGroupSwitchStart(oldGrp, model->getFuncGroupSwitchStart(oldGrp, switchcnt), switchcnt);
+      update();
       emit modified();
+      emit updateDataModels();
     }
     lock = false;
   }
@@ -1368,10 +1520,22 @@ void FunctionSwitchesPanel::on_alwaysOnGroupChanged(int value)
   if (cb && !lock) {
     lock = true;
     bool ok = false;
-    int i = sender()->property("index").toInt(&ok);
+    int grp = sender()->property("index").toInt(&ok) + 1;
 
     if (ok) {
-      model->setFuncSwitchAlwaysOnGroup(i, (unsigned int)value);
+      model->setFuncSwitchAlwaysOnGroup(grp, (unsigned int)value);
+      if (value) {
+        for (int i = 0; i < switchcnt; i += 1) {
+          if (((int)model->getFuncSwitchGroup(i) == grp) && (model->getFuncSwitchConfig(i) == ModelData::FUNC_SWITCH_CONFIG_TOGGLE))
+            model->setFuncSwitchConfig(i, ModelData::FUNC_SWITCH_CONFIG_2POS);
+        }
+        if ((int)model->getFuncGroupSwitchStart(grp, switchcnt) == switchcnt + 1) {
+          for (int i = 0; i < switchcnt; i += 1) {
+            if ((int)model->getFuncSwitchGroup(i) == grp)
+              model->setFuncSwitchStart(i, ModelData::FUNC_SWITCH_START_PREVIOUS);
+          }
+        }
+      }
       update();
       emit modified();
     }
@@ -1408,14 +1572,14 @@ SetupPanel::SetupPanel(QWidget * parent, ModelData & model, GeneralSettings & ge
   panelItemModels->registerItemModel(TimerData::countdownStartItemModel());
   panelItemModels->registerItemModel(TimerData::persistentItemModel());
   panelItemModels->registerItemModel(TimerData::modeItemModel());
-  panelFilteredModels->registerItemModel(new FilteredItemModel(ModelData::trainerModeItemModel(generalSettings, firmware)), FIM_TRAINERMODE);
   panelItemModels->registerItemModel(TimerData::showElapsedItemModel());
+  panelFilteredModels->registerItemModel(new FilteredItemModel(GeneralSettings::hatsModeItemModel(false)), FIM_HATSMODE);
+
   Board::Type board = firmware->getBoard();
 
   memset(modules, 0, sizeof(modules));
 
-  QRegExp rx(CHAR_FOR_NAMES_REGEX);
-  ui->name->setValidator(new QRegExpValidator(rx, this));
+  ui->name->setValidator(new NameValidator(board, this));
   ui->name->setMaxLength(firmware->getCapability(ModelName));
 
   if (firmware->getCapability(HasModelImage)) {
@@ -1483,7 +1647,8 @@ SetupPanel::SetupPanel(QWidget * parent, ModelData & model, GeneralSettings & ge
       timers[i] = new TimerPanel(this, model, model.timers[i], generalSettings, firmware, prevFocus, panelFilteredModels, panelItemModels);
       ui->gridLayout->addWidget(timers[i], 1+i, 1);
       connect(timers[i], &TimerPanel::modified, this, &SetupPanel::modified);
-      connect(timers[i], &TimerPanel::nameChanged, this, &SetupPanel::onTimerNameChanged);
+      connect(timers[i], &TimerPanel::nameChanged, this, &SetupPanel::onTimerChanged);
+      connect(timers[i], &TimerPanel::modeChanged, this, &SetupPanel::onTimerChanged);
       connect(this, &SetupPanel::updated, timers[i], &TimerPanel::update);
       prevFocus = timers[i]->getLastFocus();
       //  TODO more reliable method required
@@ -1535,10 +1700,13 @@ SetupPanel::SetupPanel(QWidget * parent, ModelData & model, GeneralSettings & ge
 
   // Beep Center checkboxes
   prevFocus = ui->trimsDisplay;
-  int analogs = CPN_MAX_STICKS + getBoardCapability(board, Board::Pots) + getBoardCapability(board, Board::Sliders);
-  int genAryIdx = 0;
-  for (int i = 0; i < analogs + firmware->getCapability(RotaryEncoders); i++) {
-    RawSource src((i < analogs) ? SOURCE_TYPE_STICK : SOURCE_TYPE_ROTARY_ENCODER, (i < analogs) ? i : analogs - i);
+
+  const int ttlSticks = Boards::getBoardCapability(board, Board::Sticks);
+  const int ttlFlexInputs = Boards::getBoardCapability(board, Board::FlexInputs);
+  const int ttlInputs = ttlSticks + ttlFlexInputs;
+
+  for (int i = 0; i < ttlInputs + firmware->getCapability(RotaryEncoders); i++) {
+    RawSource src((i < ttlInputs) ? SOURCE_TYPE_INPUT : SOURCE_TYPE_ROTARY_ENCODER, (i < ttlInputs) ? i + 1 : i - ttlInputs);
     QCheckBox * checkbox = new QCheckBox(this);
     checkbox->setProperty("index", i);
     checkbox->setText(src.toString(&model, &generalSettings));
@@ -1546,26 +1714,25 @@ SetupPanel::SetupPanel(QWidget * parent, ModelData & model, GeneralSettings & ge
     connect(checkbox, SIGNAL(toggled(bool)), this, SLOT(onBeepCenterToggled(bool)));
     centerBeepCheckboxes << checkbox;
     if (IS_HORUS_OR_TARANIS(board)) {
-      if (src.isPot(&genAryIdx) && (!generalSettings.isPotAvailable(genAryIdx) || generalSettings.isMultiPosPot(genAryIdx))) {
+      if (!(generalSettings.isInputAvailable(i) &&
+            (generalSettings.isInputStick(i) || (generalSettings.isInputPot(i) && !generalSettings.isInputMultiPosPot(i)) ||
+             generalSettings.isInputSlider(i))))
         checkbox->hide();
-      }
-      else if (src.isSlider(&genAryIdx) && !generalSettings.isSliderAvailable(genAryIdx)) {
-        checkbox->hide();
-      }
     }
     QWidget::setTabOrder(prevFocus, checkbox);
     prevFocus = checkbox;
   }
 
   // Startup switches warnings
-  for (int i = 0; i < getBoardCapability(board, Board::Switches); i++) {
-    Board::SwitchInfo switchInfo = Boards::getSwitchInfo(board, i);
-    switchInfo.config = Board::SwitchType(generalSettings.switchConfig[i]);
-    if (switchInfo.config == Board::SWITCH_NOT_AVAILABLE || switchInfo.config == Board::SWITCH_TOGGLE) {
+  for (int i = 0; i < Boards::getBoardCapability(board, Board::Switches); i++) {
+    GeneralSettings::SwitchConfig &swcfg = generalSettings.switchConfig[i];
+
+    if (Boards::isSwitchFunc(i, board) || !generalSettings.isSwitchAvailable(i) || swcfg.type == Board::SWITCH_TOGGLE) {
       model.switchWarningEnable |= (1 << i);
       continue;
     }
-    RawSource src(RawSourceType::SOURCE_TYPE_SWITCH, i);
+
+    RawSource src(RawSourceType::SOURCE_TYPE_SWITCH, i + 1);
     QLabel * label = new QLabel(this);
     QSlider * slider = new QSlider(this);
     QCheckBox * cb = new QCheckBox(this);
@@ -1581,7 +1748,7 @@ SetupPanel::SetupPanel(QWidget * parent, ModelData & model, GeneralSettings & ge
     slider->setPageStep(1);
     slider->setTickInterval(1);
     label->setText(src.toString(&model, &generalSettings));
-    slider->setMaximum(switchInfo.config == Board::SWITCH_3POS ? 2 : 1);
+    slider->setMaximum(swcfg.type == Board::SWITCH_3POS ? 2 : 1);
     cb->setProperty("index", i);
     ui->switchesStartupLayout->addWidget(label, 0, i + 1);
     ui->switchesStartupLayout->setAlignment(label, Qt::AlignCenter);
@@ -1600,23 +1767,18 @@ SetupPanel::SetupPanel(QWidget * parent, ModelData & model, GeneralSettings & ge
 
   // Pot warnings
   prevFocus = ui->potWarningMode;
-  int count = getBoardCapability(board, Board::Pots) + getBoardCapability(board, Board::Sliders);
 
-  if (IS_HORUS_OR_TARANIS(board) && count > 0) {
-    for (int i = 0; i < count; i++) {
-      RawSource src(SOURCE_TYPE_STICK, CPN_MAX_STICKS + i);
+  if (IS_HORUS_OR_TARANIS(board) && ttlInputs > 0) {
+    for (int i = ttlSticks; i < ttlInputs; i++) {
+      RawSource src(SOURCE_TYPE_INPUT, i + 1);
       QCheckBox * cb = new QCheckBox(this);
-      cb->setProperty("index", i);
+      cb->setProperty("index", i - ttlSticks);
       cb->setText(src.toString(&model, &generalSettings));
-      ui->potWarningLayout->addWidget(cb, 0, i + 1);
+      ui->potWarningLayout->addWidget(cb, 0, i - ttlSticks + 1);
       connect(cb, SIGNAL(toggled(bool)), this, SLOT(potWarningToggled(bool)));
       potWarningCheckboxes << cb;
-      if (src.isPot(&genAryIdx) && !generalSettings.isPotAvailable(genAryIdx)) {
+      if (!(generalSettings.isInputAvailable(i) && (generalSettings.isInputPot(i) || generalSettings.isInputSlider(i))))
         cb->hide();
-      }
-      else if (src.isSlider(&genAryIdx) && !generalSettings.isSliderAvailable(genAryIdx)) {
-        cb->hide();
-      }
       QWidget::setTabOrder(prevFocus, cb);
       prevFocus = cb;
     }
@@ -1627,6 +1789,15 @@ SetupPanel::SetupPanel(QWidget * parent, ModelData & model, GeneralSettings & ge
   }
 
   ui->trimsDisplay->setField(model.trimsDisplay, this);
+
+  if (IS_FLYSKY_EL18(board) || IS_FLYSKY_NV14(board) || IS_FLYSKY_PL18(board)) {
+    ui->cboHatsMode->setModel(panelFilteredModels->getItemModel(FIM_HATSMODE));
+    ui->cboHatsMode->setField(model.hatsMode, this);
+  }
+  else {
+    ui->lblHatsMode->hide();
+    ui->cboHatsMode->hide();
+  }
 
   if (Boards::getCapability(firmware->getBoard(), Board::FunctionSwitches) > 0) {
     funcswitches = new FunctionSwitchesPanel(this, model, generalSettings, firmware);
@@ -1656,6 +1827,9 @@ SetupPanel::SetupPanel(QWidget * parent, ModelData & model, GeneralSettings & ge
     ui->modulesLayout->addWidget(modules[CPN_MAX_MODULES]);
     connect(modules[CPN_MAX_MODULES], &ModulePanel::modified, this, &SetupPanel::modified);
     connect(modules[CPN_MAX_MODULES], &ModulePanel::updateItemModels, this, &SetupPanel::onModuleUpdateItemModels);
+    for (int i = firmware->getCapability(NumFirstUsableModule); i < firmware->getCapability(NumModules); i++) {
+      connect(modules[i], &ModulePanel::protocolChanged, modules[CPN_MAX_MODULES], &ModulePanel::updateTrainerModeItemModel);
+    }
   }
 
   disableMouseScrolling();
@@ -1698,6 +1872,7 @@ void SetupPanel::on_customThrottleWarningPosition_valueChanged(int value)
 void SetupPanel::on_throttleReverse_toggled(bool checked)
 {
   model->throttleReversed = checked;
+  emit throttleReverseChanged();
   emit modified();
 }
 
@@ -1761,18 +1936,29 @@ void SetupPanel::on_image_currentIndexChanged(int index)
 void SetupPanel::populateThrottleTrimSwitchCB()
 {
   Board::Type board = firmware->getBoard();
+  bool isBoardSurface = Boards::isSurface(board);
   lock = true;
   ui->throttleTrimSwitch->clear();
-  int idx=0;
+  int idx = 0;
   QString trim;
-  for (int i=0; i<getBoardCapability(board, Board::NumTrims); i++, idx++) {
-    // here order is TERA instead of RETA
-    if (i == 0)
-      trim = RawSource(SOURCE_TYPE_TRIM, 2).toString(model, &generalSettings);
-    else if (i == 2)
-      trim = RawSource(SOURCE_TYPE_TRIM, 0).toString(model, &generalSettings);
-    else
-      trim = RawSource(SOURCE_TYPE_TRIM, i).toString(model, &generalSettings);
+  for (int i = 0; i < getBoardCapability(board, Board::NumTrims); i++, idx++) {
+    if (isBoardSurface) {
+      if (i == 0)
+        trim = RawSource(SOURCE_TYPE_TRIM, 1 + 1).toString(model, &generalSettings);
+      else if (i == 1)
+        trim = RawSource(SOURCE_TYPE_TRIM, 0 + 1).toString(model, &generalSettings);
+      else
+        trim = RawSource(SOURCE_TYPE_TRIM, i + 1).toString(model, &generalSettings);
+    }
+    else {
+      // here order is TERA instead of RETA
+      if (i == 0)
+        trim = RawSource(SOURCE_TYPE_TRIM, 2 + 1).toString(model, &generalSettings);
+      else if (i == 2)
+        trim = RawSource(SOURCE_TYPE_TRIM, 0 + 1).toString(model, &generalSettings);
+      else
+        trim = RawSource(SOURCE_TYPE_TRIM, i + 1).toString(model, &generalSettings);
+    }
     ui->throttleTrimSwitch->addItem(trim, idx);
   }
 
@@ -1795,6 +1981,7 @@ void SetupPanel::update()
   ui->extendedLimits->setChecked(model->extendedLimits);
   ui->extendedTrims->setChecked(model->extendedTrims);
   ui->displayText->setChecked(model->displayChecklist);
+  ui->checklistInteractive->setChecked(model->checklistInteractive);
   ui->gfEnabled->setChecked(!model->noGlobalFunctions);
   ui->jitterFilter->setCurrentIndex(model->jitterFilter);
 
@@ -1835,7 +2022,7 @@ void SetupPanel::updateStartupSwitches()
     bool enabled = !(model->switchWarningEnable & (1 << index));
     if (IS_HORUS_OR_TARANIS(firmware->getBoard())) {
       value = (switchStates >> (2 * index)) & 0x03;
-      if (generalSettings.switchConfig[index] != Board::SWITCH_3POS && value == 2) {
+      if (generalSettings.switchConfig[index].type != Board::SWITCH_3POS && value == 2) {
         value = 1;
       }
     }
@@ -1874,7 +2061,7 @@ void SetupPanel::startupSwitchEdited(int value)
 
     model->switchWarningStates &= ~mask;
 
-    if (IS_HORUS_OR_TARANIS(firmware->getBoard()) && generalSettings.switchConfig[index] != Board::SWITCH_3POS) {
+    if (IS_HORUS_OR_TARANIS(firmware->getBoard()) && generalSettings.switchConfig[index].type != Board::SWITCH_3POS) {
       if (value == 1) {
         value = 2;
       }
@@ -1908,12 +2095,14 @@ void SetupPanel::updatePotWarnings()
 {
   lock = true;
   ui->potWarningMode->setCurrentIndex(model->potsWarningMode);
+
   for (int i = 0; i < potWarningCheckboxes.size(); i++) {
     QCheckBox *checkbox = potWarningCheckboxes[i];
     int index = checkbox->property("index").toInt();
     checkbox->setChecked(model->potsWarnEnabled[index]);
     checkbox->setDisabled(model->potsWarningMode == 0);
   }
+
   lock = false;
 }
 
@@ -1939,6 +2128,12 @@ void SetupPanel::on_potWarningMode_currentIndexChanged(int index)
 void SetupPanel::on_displayText_toggled(bool checked)
 {
   model->displayChecklist = checked;
+  emit modified();
+}
+
+void SetupPanel::on_checklistInteractive_toggled(bool checked)
+{
+  model->checklistInteractive = checked;
   emit modified();
 }
 
@@ -2145,7 +2340,7 @@ void SetupPanel::swapTimerData(int idx1, int idx2)
   }
 }
 
-void SetupPanel::onTimerNameChanged()
+void SetupPanel::onTimerChanged()
 {
   updateItemModels();
 }

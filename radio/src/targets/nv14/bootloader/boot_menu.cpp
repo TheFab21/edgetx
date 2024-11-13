@@ -19,23 +19,25 @@
  * GNU General Public License for more details.
  */
 
+#include "hal/gpio.h"
+#include "stm32_gpio.h"
+
 #include "board.h"
 #include "fw_version.h"
 #include "lcd.h"
 
 #include "translations.h"
 
-#include "../../common/arm/stm32/bootloader/boot.h"
-#include "../../common/arm/stm32/bootloader/bin_files.h"
+#include "targets/common/arm/stm32/bootloader/boot.h"
+#include "targets/common/arm/stm32/bootloader/bin_files.h"
 
 #include <lvgl/lvgl.h>
 
 #define RADIO_MENU_LEN 2
 
-#define USB_SW_TO_INTERNAL_MODULE() GPIO_SetBits(USB_SW_GPOIO, USB_SW_PIN);
-#define USB_SW_TO_MCU() GPIO_ResetBits(USB_SW_GPOIO, USB_SW_PIN);
+#define USB_SW_TO_INTERNAL_MODULE() gpio_set(USB_SW_GPIO);
+#define USB_SW_TO_MCU()             gpio_clear(USB_SW_GPIO);
 
-#define SELECTED_COLOR (INVERS | COLOR_THEME_SECONDARY1)
 #define DEFAULT_PADDING 28
 #define DOUBLE_PADDING  56
 #define MESSAGE_TOP     (LCD_H - (2*DOUBLE_PADDING))
@@ -43,22 +45,17 @@
 const uint8_t __bmp_plug_usb[] {
 #include "bmp_plug_usb.lbm"
 };
-LZ4Bitmap BMP_PLUG_USB(BMP_ARGB4444, __bmp_plug_usb);
+LZ4BitmapBuffer BMP_PLUG_USB(BMP_ARGB4444, (LZ4Bitmap*)__bmp_plug_usb);
 
 const uint8_t __bmp_usb_plugged[] {
 #include "bmp_usb_plugged.lbm"
 };
-LZ4Bitmap BMP_USB_PLUGGED(BMP_ARGB4444, __bmp_usb_plugged);
-
-const uint8_t __bmp_background[] {
-#include "bmp_background.lbm"
-};
-LZ4Bitmap BMP_BACKGROUND(BMP_ARGB4444, __bmp_background);
+LZ4BitmapBuffer BMP_USB_PLUGGED(BMP_ARGB4444, (LZ4Bitmap*)__bmp_usb_plugged);
 
 #define BL_GREEN      COLOR2FLAGS(RGB(73, 219, 62))
 #define BL_RED        COLOR2FLAGS(RGB(229, 32, 30))
-#define BL_BACKGROUND COLOR2FLAGS(BLACK)
-#define BL_FOREGROUND COLOR2FLAGS(WHITE)
+#define BL_BACKGROUND COLOR_BLACK
+#define BL_FOREGROUND COLOR_WHITE
 #define BL_SELECTED   COLOR2FLAGS(RGB(11, 65, 244)) // deep blue
 
 extern BitmapBuffer * lcd;
@@ -68,9 +65,7 @@ static bool rfUsbAccess = false;
 void bootloaderInitScreen()
 {
   lcdInitDisplayDriver();
-  backlightInit();
-  backlightEnable(100);
-  setTrimsAsButtons(true);
+  setHatsAsKeys(true);
 }
 
 static void bootloaderDrawTitle(const char* text)
@@ -86,34 +81,20 @@ static void bootloaderDrawFooter()
 
 static void bootloaderDrawBackground()
 {
-  // we have plenty of memory, let's cache that background
-  static BitmapBuffer* _background = nullptr;
-
-  if (!_background) {
-    _background = new BitmapBuffer(BMP_RGB565, LCD_W, LCD_H);
-    
-    for (int i=0; i<LCD_W; i += BMP_BACKGROUND.width()) {
-      for (int j=0; j<LCD_H; j += BMP_BACKGROUND.height()) {
-        BitmapBuffer* bg_bmp = &BMP_BACKGROUND;
-        _background->drawBitmap(i, j, bg_bmp);
-      }
-    }
-  }
-
-  if (_background) {
-    lcd->drawBitmap(0, 0, _background);
-    lcd->drawFilledRect(0, 0, LCD_W, LCD_H, SOLID,
-                        COLOR2FLAGS(BLACK), OPACITY(4));
-  }
-  else {
-    lcd->clear(BL_BACKGROUND);
-  }
+  lcd->clear(BL_BACKGROUND);
 }
 
 void bootloaderDrawScreen(BootloaderState st, int opt, const char* str)
 {
+    static bool _first_screen = true;
+
     lcdInitDirectDrawing();
     bootloaderDrawBackground();
+
+    if (!_first_screen) {
+        // ... and turn backlight ON
+        backlightEnable(BACKLIGHT_LEVEL_MAX);
+    }
 
     int center = LCD_W/2;
     if (st == ST_START) {
@@ -189,27 +170,32 @@ void bootloaderDrawScreen(BootloaderState st, int opt, const char* str)
           memset(&tag, 0, sizeof(tag));
           extractFirmwareVersion(&tag);
 
-          lcd->drawText(LCD_W / 4 + DEFAULT_PADDING,
-                        MESSAGE_TOP - DEFAULT_PADDING,
-                        TR_BL_FORK, RIGHT | BL_FOREGROUND);
-          lcd->drawSizedText(LCD_W / 4 + 6 + DEFAULT_PADDING,
-                             MESSAGE_TOP - DEFAULT_PADDING, tag.fork, 6,
-                             BL_FOREGROUND);
+          if (strcmp(tag.flavour, FLAVOUR)) {
+            lcd->drawText(20, MESSAGE_TOP, LV_SYMBOL_CLOSE " " TR_BL_INVALID_FIRMWARE,
+                    BL_FOREGROUND);
+          } else {
+            lcd->drawText(LCD_W / 4 + DEFAULT_PADDING,
+                          MESSAGE_TOP - DEFAULT_PADDING,
+                          TR_BL_FORK, RIGHT | BL_FOREGROUND);
+            lcd->drawSizedText(LCD_W / 4 + 6 + DEFAULT_PADDING,
+                               MESSAGE_TOP - DEFAULT_PADDING, tag.fork, 6,
+                               BL_FOREGROUND);
 
-          lcd->drawText(LCD_W / 4 + DEFAULT_PADDING, MESSAGE_TOP,
-                        TR_BL_VERSION, RIGHT | BL_FOREGROUND);
-          lcd->drawText(LCD_W / 4 + 6 + DEFAULT_PADDING, MESSAGE_TOP,
-                        tag.version, BL_FOREGROUND);
+            lcd->drawText(LCD_W / 4 + DEFAULT_PADDING, MESSAGE_TOP,
+                          TR_BL_VERSION, RIGHT | BL_FOREGROUND);
+            lcd->drawText(LCD_W / 4 + 6 + DEFAULT_PADDING, MESSAGE_TOP,
+                          tag.version, BL_FOREGROUND);
 
-          lcd->drawText(LCD_W / 4 + DEFAULT_PADDING,
-                        MESSAGE_TOP + DEFAULT_PADDING,
-                        TR_BL_RADIO, RIGHT | BL_FOREGROUND);
-          lcd->drawText(LCD_W / 4 + 6 + DEFAULT_PADDING,
-                        MESSAGE_TOP + DEFAULT_PADDING, tag.flavour,
-                        BL_FOREGROUND);
+            lcd->drawText(LCD_W / 4 + DEFAULT_PADDING,
+                          MESSAGE_TOP + DEFAULT_PADDING,
+                          TR_BL_RADIO, RIGHT | BL_FOREGROUND);
+            lcd->drawText(LCD_W / 4 + 6 + DEFAULT_PADDING,
+                          MESSAGE_TOP + DEFAULT_PADDING, tag.flavour,
+                          BL_FOREGROUND);
 
-          lcd->drawText(LCD_W - DOUBLE_PADDING, MESSAGE_TOP - 10,
-                        LV_SYMBOL_OK, BL_GREEN);
+            lcd->drawText(LCD_W / 4 + DEFAULT_PADDING - 90, MESSAGE_TOP,
+                          LV_SYMBOL_OK, BL_GREEN);
+          }
         }
       }
 
@@ -252,6 +238,8 @@ void bootloaderDrawScreen(BootloaderState st, int opt, const char* str)
       pos -= 79;
       lcd->drawSolidRect(79, 72 + (opt * 35), pos, 26, 2, BL_SELECTED);
     }
+
+    _first_screen = false;
 }
 
 void bootloaderDrawFilename(const char* str, uint8_t line, bool selected)

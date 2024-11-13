@@ -1,7 +1,8 @@
 /*
- * Copyright (C) OpenTX
+ * Copyright (C) EdgeTX
  *
  * Based on code named
+ *   opentx - https://github.com/opentx/opentx
  *   th9x - http://code.google.com/p/th9x
  *   er9x - http://code.google.com/p/er9x
  *   gruvin9x - http://code.google.com/p/gruvin9x
@@ -29,7 +30,8 @@
   #undef main
 #endif
 
-#include "appdebugmessagehandler.h"
+#include <AppDebugMessageHandler>
+
 #include "customdebug.h"
 #include "mainwindow.h"
 #include "version.h"
@@ -38,6 +40,7 @@
 #include "storage.h"
 #include "translations.h"
 #include "helpers.h"
+#include "boardfactories.h"
 
 #ifdef __APPLE__
 #include <QProxyStyle>
@@ -230,6 +233,8 @@ int main(int argc, char *argv[])
   }
 #endif
 
+  Q_INIT_RESOURCE(hwdefs);
+  gBoardFactories = new BoardFactories();
   registerStorageFactories();
   registerOpenTxFirmwares();
   SimulatorLoader::registerSimulators();
@@ -263,6 +268,7 @@ int main(int argc, char *argv[])
   SimulatorLoader::unregisterSimulators();
   unregisterOpenTxFirmwares();
   unregisterStorageFactories();
+  gBoardFactories->unregisterBoardFactories();
 
 #if defined(JOYSTICKS) || defined(SIMU_AUDIO)
   SDL_Quit();

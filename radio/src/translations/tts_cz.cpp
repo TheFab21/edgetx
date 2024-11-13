@@ -19,7 +19,7 @@
  * GNU General Public License for more details.
  */
 
-#include "opentx.h"
+#include "edgetx.h"
 
 enum CzechPrompts {
   CZ_PROMPT_NUMBERS_BASE = 0,
@@ -39,7 +39,7 @@ enum CzechPrompts {
 };
 
 
-  #define CZ_PUSH_UNIT_PROMPT(u, p) cz_pushUnitPrompt((u), (p), id)
+#define CZ_PUSH_UNIT_PROMPT(u, p) cz_pushUnitPrompt((u), (p), id, fragmentVolume)
 
 #define MALE     0x80
 #define FEMALE     0x81

@@ -200,6 +200,8 @@ static void simuLcdExitHandler(lv_disp_drv_t* disp_drv)
   }
 }
 
+void lcdSetInitalFrameBuffer(void*) {}
+
 void lcdInit()
 {
 #if defined(LCD_VERTICAL_INVERT)
@@ -209,10 +211,6 @@ void lcdInit()
 
   lcdSetWaitCb(simuLcdExitHandler);
   lcdSetFlushCb(simuRefreshLcd);
-}
-
-void DMAWait()
-{
 }
 
 void DMAFillRect(uint16_t *dest, uint16_t destw, uint16_t desth, uint16_t x,

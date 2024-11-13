@@ -1,7 +1,8 @@
 /*
- * Copyright (C) OpenTX
+ * Copyright (C) EdgeTX
  *
  * Based on code named
+ *   opentx - https://github.com/opentx/opentx
  *   th9x - http://code.google.com/p/th9x
  *   er9x - http://code.google.com/p/er9x
  *   gruvin9x - http://code.google.com/p/gruvin9x
@@ -21,7 +22,6 @@
 #include "labeled.h"
 #include "firmwares/opentx/opentxinterface.h"
 #include "firmwares/edgetx/edgetxinterface.h"
-#include "miniz.c"    //  Can only be included once!
 
 #include <regex>
 
@@ -73,7 +73,10 @@ bool LabelsStorageFormat::loadBin(RadioData & radioData)
     return false;
   }
 
+
   board = loadInterface->getBoard();
+
+  radioData.generalSettings.convertLegacyConfiguration(board);
 
   QByteArray modelsListBuffer;
   if (!loadFile(modelsListBuffer, "RADIO/models.txt")) {
@@ -93,7 +96,7 @@ bool LabelsStorageFormat::loadBin(RadioData & radioData)
      }
 
     // determine if we have a model number
-    QStringList parts = line.split(QRegExp("\\s+"), QString::SkipEmptyParts);
+    QStringList parts = line.split(QRegExp("\\s+"), Qt::SkipEmptyParts);
     if (parts.size() == 2) {
       // parse model number
       int modelNumber = parts[0].toInt();

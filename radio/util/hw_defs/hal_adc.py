@@ -12,7 +12,7 @@ def eprint(*args, **kwargs):
 class ADCInput:
 
     TYPE_STICK  = 'STICK'
-    TYPE_POT    = 'POT'
+    TYPE_FLEX   = 'FLEX'
     TYPE_SWITCH = 'SWITCH'
     # TYPE_BATT   = 'BATT'
 
@@ -60,25 +60,25 @@ class ADCInputParser:
         },
         {
             'range': range(1, MAX_POTS + 1),
-            'type': ADCInput.TYPE_POT,
+            'type': ADCInput.TYPE_FLEX,
             'suffix': 'POT{}',
             'name': 'P{}',
         },
         {
             'range': range(1, MAX_SLIDERS + 1),
-            'type': ADCInput.TYPE_POT,
+            'type': ADCInput.TYPE_FLEX,
             'suffix': 'SLIDER{}',
             'name': 'SL{}',
         },
         {
             'range': range(1, MAX_EXTS + 1),
-            'type': ADCInput.TYPE_POT,
+            'type': ADCInput.TYPE_FLEX,
             'suffix': 'EXT{}',
             'name': 'EXT{}',
         },
         {
             'range': range(1, 2 + 1),
-            'type': 'AXIS',
+            'type': ADCInput.TYPE_FLEX,
             'suffix': 'MOUSE{}',
             'name': MouseName(),
         },
@@ -123,8 +123,10 @@ class ADCInputParser:
     def _parse_dirs(self):
 
         ret = []
-        dirs = self.hw_defs['ADC_DIRECTION'].strip('{} ').split(',')
-        #eprint(dirs)
+        dirs = self.hw_defs.get('ADC_DIRECTION') or ''
+        if dirs:
+            dirs = dirs.strip('{} ').split(',')
+        eprint(dirs)
         for i in dirs:
             ret.append(int(i))
 
@@ -176,7 +178,6 @@ class ADCInputParser:
             adc.gpio_pin_mosi = self.hw_defs['ADC_SPI_GPIO_PIN_MOSI']
             adc.gpio_pin_sck = self.hw_defs['ADC_SPI_GPIO_PIN_SCK']
             adc.gpio_pin_cs = self.hw_defs['ADC_SPI_GPIO_PIN_CS']
-            adc.gpio_af = self.hw_defs['ADC_SPI_GPIO_AF']
             adcs.append(adc)
         
         adc_main = self._parse_adc('MAIN', 'ADC_MAIN', 'ADC')
@@ -233,10 +234,10 @@ class ADCInputParser:
                 d = self.dirs[idx]
                 if d < 0:
                     adc_input.inverted = True
-            if adc_input.type == 'POT':
+            if adc_input.type == 'FLEX':
                 input_labels = self.labels[adc_input.name]
-                adc_input.label = input_labels['label']
-                adc_input.short_label = input_labels['short_label']
+                adc_input.label = input_labels.get('label')
+                adc_input.short_label = input_labels.get('short_label')
                 cfg = pot_cfg_by_target(self.target,adc_input.name)
                 if cfg:
                     adc_input.default = cfg.get('default')

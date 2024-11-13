@@ -1,7 +1,8 @@
 /*
- * Copyright (C) OpenTX
+ * Copyright (C) EdgeTX
  *
  * Based on code named
+ *   opentx - https://github.com/opentx/opentx
  *   th9x - http://code.google.com/p/th9x
  *   er9x - http://code.google.com/p/er9x
  *   gruvin9x - http://code.google.com/p/gruvin9x
@@ -18,8 +19,7 @@
  * GNU General Public License for more details.
  */
 
-#ifndef _SIMULATORWIDGET_H_
-#define _SIMULATORWIDGET_H_
+#pragma once
 
 #include "appdata.h"
 #include "constants.h"
@@ -110,7 +110,7 @@ class SimulatorWidget : public QWidget
     void onSimulatorHeartbeat(qint32 loops, qint64 timestamp);
     void onPhaseChanged(qint32 phase, const QString & name);
     void onSimulatorError(const QString & error);
-    void onRadioWidgetValueChange(const RadioWidget::RadioWidgetType type, const int index, int value);
+    void onRadioWidgetValueChange(const RadioWidget::RadioWidgetType type, int index, int value);
     void onjoystickAxisValueChanged(int axis, int value);
     void onjoystickButtonValueChanged(int button, bool state);
 
@@ -151,5 +151,3 @@ class SimulatorWidget : public QWidget
     int switchDirection[MAX_JS_BUTTONS];
 #endif
 };
-
-#endif // _SIMULATORWIDGET_H_

@@ -25,7 +25,7 @@
 #include <stdio.h>
 #include <algorithm>
 
-#include "opentx.h"
+#include "edgetx.h"
 #include "bin_allocator.h"
 
 #include "lua_api.h"
@@ -35,10 +35,14 @@
 #include "api_filesystem.h"
 #include "switches.h"
 
+#if defined(COLORLCD)
+  #include "standalone_lua.h"
+#endif
+
 #if defined(LIBOPENUI)
   #include "libopenui.h"
 #else
-  #include "libopenui/src/libopenui_file.h"
+  #include "lib_file.h"
 #endif
 
 extern "C" {
@@ -74,15 +78,10 @@ uint8_t instructionsPercent = 0;
 tmr10ms_t luaCycleStart;
 char lua_warning_info[LUA_WARNING_INFO_LEN+1];
 uint8_t errorState;
-struct our_longjmp * global_lj = 0;
+struct our_longjmp * global_lj = nullptr;
 #if defined(COLORLCD)
 uint32_t luaExtraMemoryUsage = 0;
 #endif
-
-static bool _is_standalone_script()
-{
-  return scriptInternalData[0].reference == SCRIPT_STANDALONE;
-}
 
 #if defined(LUA_ALLOCATOR_TRACER)
 
@@ -251,10 +250,6 @@ void luaDisable()
 {
   POPUP_WARNING("Lua disabled!");
   luaState = INTERPRETER_PANIC;
-
-#if defined(USE_TRIMS_AS_BUTTONS)
-  if (_is_standalone_script()) setTrimsAsButtons(false);
-#endif
 }
 
 void luaClose(lua_State ** L)
@@ -629,8 +624,12 @@ static bool luaLoadFunctionScript(uint8_t ref)
   CustomFunctionData * fn;
 
   if (ref <= SCRIPT_FUNC_LAST) {
-    idx = ref - SCRIPT_FUNC_FIRST;
-    fn = &g_model.customFn[idx];
+    if (modelSFEnabled()) {
+      idx = ref - SCRIPT_FUNC_FIRST;
+      fn = &g_model.customFn[idx];
+    } else {
+      return false;
+    }
   }
   else if (radioGFEnabled()) {
     idx = ref - SCRIPT_GFUNC_FIRST;
@@ -650,6 +649,19 @@ static bool luaLoadFunctionScript(uint8_t ref)
       return true;
     }
   }
+
+  if (fn -> func == FUNC_RGB_LED && ZEXIST(fn -> play.name)) {
+    if (luaScriptsCount < MAX_SCRIPTS) {
+      ScriptInternalData & sid = scriptInternalData[luaScriptsCount++];
+      sid.reference = ref;
+      return luaLoadFile(SCRIPTS_RGB_PATH, fn->play.name, sid);
+    }
+    else {
+      POPUP_WARNING(STR_TOO_MANY_LUA_SCRIPTS);
+      return true;
+    }
+  }
+
   return false;
 }
 
@@ -683,7 +695,7 @@ bool isTelemetryScriptAvailable()
 #if defined(PCBTARANIS)
   for (int i = 0; i < luaScriptsCount; i++) {
     ScriptInternalData & sid = scriptInternalData[i];
-    if (sid.reference == SCRIPT_TELEMETRY_FIRST + s_frsky_view) {
+    if (sid.reference == SCRIPT_TELEMETRY_FIRST + selectedTelemView) {
       return true;
     }
   }
@@ -706,42 +718,13 @@ void displayLuaError(bool firstCall = false)
   }
 
 #if defined(COLORLCD)
-  static bool drewBackground = false;
-  
-  if (firstCall)
-    drewBackground = false;
-  
-  if (!luaLcdAllowed || luaLcdBuffer == nullptr)
-    return;
-  
-  coord_t w = 0.75 * LCD_W;
-  coord_t left = (LCD_W - w) / 2;
-#if (LCD_W > LCD_H)
-  coord_t hh = getFontHeight(FONT(XL)) + 4;
-#else
-  coord_t hh = getFontHeight(FONT(L)) + 4;
-#endif
-  coord_t h = 0.75 * LCD_H - hh;
-  coord_t top = (LCD_H - h + hh / 2) / 2;
-  
-  if (!drewBackground) {
-    drewBackground = true;
-    luaLcdBuffer->drawFilledRect(0, 0, LCD_W, LCD_H, SOLID, BLACK, OPACITY(6));
+  if (StandaloneLuaWindow::instance()) {
+    StandaloneLuaWindow::instance()->showError(firstCall, title, lua_warning_info);
   }
-
-  luaLcdBuffer->drawSolidFilledRect(left, top - hh, w, hh, COLOR_THEME_SECONDARY1);
-  luaLcdBuffer->drawSolidFilledRect(left, top, w, h, COLOR_THEME_SECONDARY3);
-#if (LCD_W > LCD_H)
-  luaLcdBuffer->drawText(left + 10, top - hh + 2, title, FONT(XL) | COLOR_THEME_PRIMARY2);
-  drawTextLines(luaLcdBuffer, left + 10, top + 5, w - 20, h - 10, lua_warning_info, FONT(L) | COLOR_THEME_PRIMARY1);
-#else
-  luaLcdBuffer->drawText(left + 10, top - hh + 2, title, FONT(L) | COLOR_THEME_PRIMARY2);
-  drawTextLines(luaLcdBuffer, left + 10, top + 5, w - 20, h - 10, lua_warning_info, FONT(STD) | COLOR_THEME_PRIMARY1);
-#endif
 #else
   if (!luaLcdAllowed)
     return;
-  
+
   drawMessageBox(title);
   coord_t y = WARNING_LINE_Y + FH + 4;
   
@@ -900,7 +883,7 @@ static void luaLoadScripts(bool init, const char * filename = nullptr)
         sid.reference = SCRIPT_STANDALONE;
         if (luaLoad(filename, sid)) {
           luaError(lsScripts, sid.state);
-          continue;
+          break;
         }
       }
       // Skip the rest of the loop if we did not get a new script
@@ -913,7 +896,7 @@ static void luaLoadScripts(bool init, const char * filename = nullptr)
     // 1. run chunk() 2. run init(), if available:
     do {
       // Resume running the coroutine
-      luaStatus = lua_resume(lsScripts, 0, 0);
+      luaStatus = lua_resume(lsScripts, nullptr, 0);
      
       if (luaStatus == LUA_YIELD) {
         // Coroutine yielded - wait for the next cycle
@@ -966,7 +949,9 @@ static void luaLoadScripts(bool init, const char * filename = nullptr)
           // If init(), push it on the stack
           if (initFunction != LUA_NOREF) {
             lua_rawgeti(lsScripts, LUA_REGISTRYINDEX, initFunction);
-            if (ref == SCRIPT_STANDALONE) luaLcdAllowed = true;
+            if (ref == SCRIPT_STANDALONE) {
+              luaLcdAllowed = true;
+            }
           }
         }
       }
@@ -1038,6 +1023,7 @@ static bool resumeLua(bool init, bool allowLcdUsage)
         luaNextEvent(&evt);
         if (evt.event == EVT_KEY_LONG(KEY_EXIT)) {
           luaState = INTERPRETER_RELOAD_PERMANENT_SCRIPTS;
+          killEvents(evt.event);
         }
       }
       
@@ -1054,7 +1040,7 @@ static bool resumeLua(bool init, bool allowLcdUsage)
       if (allowLcdUsage) {
 #if defined(PCBTARANIS)
         if ((menuHandlers[menuLevel] == menuViewTelemetry &&
-             ref == SCRIPT_TELEMETRY_FIRST + s_frsky_view) ||
+             ref == SCRIPT_TELEMETRY_FIRST + selectedTelemView) ||
             ref == SCRIPT_STANDALONE) {
 #else
         if (ref == SCRIPT_STANDALONE) {
@@ -1099,25 +1085,28 @@ static bool resumeLua(bool init, bool allowLcdUsage)
           CustomFunctionsContext * functionsContext;
 
           if (ref <= SCRIPT_FUNC_LAST) {
+            if (!modelSFEnabled()) continue;
             idx = ref - SCRIPT_FUNC_FIRST;
             fn = &g_model.customFn[idx];
             functionsContext = &modelFunctionsContext;
           } else {
+            if (!radioGFEnabled()) continue;
             idx = ref - SCRIPT_GFUNC_FIRST;
             fn = &g_eeGeneral.customFn[idx];
             functionsContext = &globalFunctionsContext;
           }
 
-          tmr10ms_t tmr10ms = get_tmr10ms();
-
-          if (getSwitch(fn->swtch) && (functionsContext->lastFunctionTime[idx] == 0 || CFN_PLAY_REPEAT(fn) == 0)) {
-            lua_rawgeti(lsScripts, LUA_REGISTRYINDEX, sid.run);
-            functionsContext->lastFunctionTime[idx] = tmr10ms;
-          }
-          else {
-            if (sid.background == LUA_NOREF) continue;
-            lua_rawgeti(lsScripts, LUA_REGISTRYINDEX, sid.background);
-          }
+          if (CFN_ACTIVE(fn)) {
+            tmr10ms_t tmr10ms = get_tmr10ms();
+            if (getSwitch(fn->swtch) && (functionsContext->lastFunctionTime[idx] == 0 || CFN_PLAY_REPEAT(fn) == 0)) {
+              lua_rawgeti(lsScripts, LUA_REGISTRYINDEX, sid.run);
+              functionsContext->lastFunctionTime[idx] = tmr10ms;
+            }
+            else {
+              if (sid.background == LUA_NOREF) continue;
+              lua_rawgeti(lsScripts, LUA_REGISTRYINDEX, sid.background);
+            }
+          } else continue;
         }
 #if defined(PCBTARANIS)
         else if (ref <= SCRIPT_TELEMETRY_LAST) {
@@ -1134,7 +1123,7 @@ static bool resumeLua(bool init, bool allowLcdUsage)
     fullGC = false;
 
     // Resume running the coroutine
-    luaStatus = lua_resume(lsScripts, 0, inputsCount);
+    luaStatus = lua_resume(lsScripts, nullptr, inputsCount);
 
     if (luaStatus == LUA_YIELD) {
       // Coroutine yielded - wait for the next cycle
@@ -1172,8 +1161,7 @@ static bool resumeLua(bool init, bool allowLcdUsage)
             luaState = INTERPRETER_RELOAD_PERMANENT_SCRIPTS;
           }
           else if (luaDisplayStatistics) {
-  #if defined(COLORLCD)
-  #else
+  #if !defined(COLORLCD)
             lcdDrawSolidHorizontalLine(0, 7*FH-1, lcdLastRightPos+6, ERASE);
             lcdDrawText(0, 7*FH, "GV Use: ");
             lcdDrawNumber(lcdLastRightPos, 7*FH, luaGetMemUsed(lsScripts), LEFT);
@@ -1198,16 +1186,16 @@ static bool resumeLua(bool init, bool allowLcdUsage)
        
         if (evt.event == EVT_KEY_LONG(KEY_EXIT)) {
           TRACE("Script force exit");
-          // killEvents(evt);
           luaEmptyEventBuffer();
           luaState = INTERPRETER_RELOAD_PERMANENT_SCRIPTS;
+          killEvents(evt.event);
         }
 #if defined(KEYS_GPIO_REG_MENU)
       // TODO find another key and add a #define
         else if (evt.event == EVT_KEY_LONG(KEY_MENU)) {
-          killEvents(evt.event);
           luaEmptyEventBuffer();
           luaDisplayStatistics = !luaDisplayStatistics;
+          killEvents(evt.event);
         }
 #endif
       }
@@ -1234,13 +1222,10 @@ static bool resumeLua(bool init, bool allowLcdUsage)
 } //resumeLua(...)
 
 
-bool luaTask(event_t evt, bool allowLcdUsage)
+bool luaTask(bool allowLcdUsage)
 {
   bool init = false;
   bool scriptWasRun = false;
- 
-  // Add event to buffer
-  if (evt != 0) { luaPushEvent(evt); }
  
   // For preemption
   luaCycleStart = get_tmr10ms();
@@ -1252,10 +1237,6 @@ bool luaTask(event_t evt, bool allowLcdUsage)
     case INTERPRETER_RELOAD_PERMANENT_SCRIPTS:
       init = true;
       luaState = INTERPRETER_LOADING;
-
-#if defined(USE_TRIMS_AS_BUTTONS)
-      if (_is_standalone_script()) setTrimsAsButtons(false);
-#endif
    
     case INTERPRETER_LOADING:
       PROTECT_LUA() {
@@ -1268,10 +1249,6 @@ bool luaTask(event_t evt, bool allowLcdUsage)
     case INTERPRETER_START_RUNNING:
       init = true;
       luaState = INTERPRETER_RUNNING;
-
-#if defined(USE_TRIMS_AS_BUTTONS)
-      if (_is_standalone_script()) setTrimsAsButtons(true);
-#endif
       
     case INTERPRETER_RUNNING:
       PROTECT_LUA() {
@@ -1279,6 +1256,13 @@ bool luaTask(event_t evt, bool allowLcdUsage)
       }
       else luaDisable();
       UNPROTECT_LUA();
+      break;
+
+#if defined(COLORLCD)
+    case INTERPRETER_PAUSED:
+      // stand alone script running
+      break;
+#endif
   }
   return scriptWasRun;
 }
@@ -1320,7 +1304,7 @@ void luaInit()
 #if defined(USE_BIN_ALLOCATOR)
     L = lua_newstate(bin_l_alloc, nullptr);   //we use our own allocator!
 #elif defined(LUA_ALLOCATOR_TRACER)
-    memclear(&lsScriptsTrace, sizeof(lsScriptsTrace);
+    memclear(&lsScriptsTrace, sizeof(lsScriptsTrace));
     lsScriptsTrace.script = "lua_newstate(scripts)";
     L = lua_newstate(tracer_alloc, &lsScriptsTrace);   //we use tracer allocator
 #else
@@ -1405,4 +1389,18 @@ bool isRadioScriptTool(const char * filename)
 {
   const char * ext = getFileExtension(filename);
   return ext && !strcasecmp(ext, SCRIPT_EXT);
+}
+
+void l_pushtableint(lua_State* ls, const char * key, int value)
+{
+  lua_pushstring(ls, key);
+  lua_pushinteger(ls, value);
+  lua_settable(ls, -3);
+}
+
+void l_pushtablebool(lua_State* ls, const char * key, bool value)
+{
+  lua_pushstring(ls, key);
+  lua_pushboolean(ls, value);
+  lua_settable(ls, -3);
 }

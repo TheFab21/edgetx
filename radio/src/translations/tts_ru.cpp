@@ -19,7 +19,7 @@
  * GNU General Public License for more details.
  */
 
-#include "opentx.h"
+#include "edgetx.h"
 
 enum RusPrompts {
   RU_PROMPT_NUMBERS_BASE = 0,
@@ -42,7 +42,7 @@ enum RusPrompts {
 #define RU_FEMALE_UNIT 0xFF
 
 
-  #define RU_PUSH_UNIT_PROMPT(u, p) ru_pushUnitPrompt((u), (p), id)
+#define RU_PUSH_UNIT_PROMPT(u, p) ru_pushUnitPrompt((u), (p), id, fragmentVolume)
 
 I18N_PLAY_FUNCTION(ru, pushUnitPrompt,  uint8_t unitprompt, int16_t number)
 {

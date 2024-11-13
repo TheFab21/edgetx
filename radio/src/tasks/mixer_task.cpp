@@ -23,10 +23,11 @@
 #include "mixer_task.h"
 #include "mixer_scheduler.h"
 
-#include "opentx.h"
+#include "edgetx.h"
 #include "switches.h"
+#include "hal/usb_driver.h"
 
-#include "watchdog_driver.h"
+#include "hal/watchdog_driver.h"
 
 RTOS_TASK_HANDLE mixerTaskId;
 RTOS_DEFINE_STACK(mixerTaskId, mixerStack, MIXER_STACK_SIZE);
@@ -121,10 +122,8 @@ constexpr uint8_t MIXER_MAX_PERIOD = MAX_REFRESH_RATE / 1000 /*ms*/;
 
 void execMixerFrequentActions()
 {
-#if defined(SBUS_TRAINER)
   // SBUS trainer
   processSbusInput();
-#endif
 
 #if defined(IMU)
   gyro.wakeup();
@@ -165,8 +164,8 @@ TASK_FUNCTION(mixerTask)
     }
 
 #if defined(DEBUG_MIXER_SCHEDULER)
-    GPIO_SetBits(EXTMODULE_TX_GPIO, EXTMODULE_TX_GPIO_PIN);
-    GPIO_ResetBits(EXTMODULE_TX_GPIO, EXTMODULE_TX_GPIO_PIN);
+    gpio_set(EXTMODULE_TX_GPIO);
+    gpio_clear(EXTMODULE_TX_GPIO);
 #endif
 
     // re-enable trigger
@@ -187,7 +186,7 @@ TASK_FUNCTION(mixerTask)
 
     if (_mixer_running) {
 
-      uint16_t t0 = getTmr2MHz();
+      uint32_t t0 = timersGetUsTick();
 
       DEBUG_TIMER_START(debugTimerMixer);
       mixerTaskLock();
@@ -213,7 +212,7 @@ TASK_FUNCTION(mixerTask)
       // so let's do it here.
       WDG_RESET();
 
-      t0 = getTmr2MHz() - t0;
+      t0 = timersGetUsTick() - t0;
       if (t0 > maxMixerDuration)
         maxMixerDuration = t0;
     }

@@ -3,28 +3,56 @@ set(MCU cortex-m4)
 set(FPU_FLAGS "-mfloat-abi=hard -mfpu=fpv4-sp-d16")
 
 if(NOT NATIVE_BUILD)
+
+  # Add MCU specific flags
+  add_link_options(
+    -mcpu=cortex-m4 -mfloat-abi=hard -mfpu=fpv4-sp-d16
+  )
+
   # STM32 HAL/LL library
   set(STM32CUBE_DIR ${THIRDPARTY_DIR}/STM32F4xx_HAL_Driver)
   include_directories(${STM32CUBE_DIR}/Inc)
+  
+  if(CPU_TYPE_FULL STREQUAL STM32F429xI)
+    set(STM32_COLORLCD_DRIVERS
+      ${STM32CUBE_DIR}/Src/stm32f4xx_ll_dma2d.c
+      ${STM32CUBE_DIR}/Src/stm32f4xx_hal_ltdc.c
+    )
+  endif()
+
 
   add_library(stm32cube_ll OBJECT EXCLUDE_FROM_ALL
     # LL drivers
     ${STM32CUBE_DIR}/Src/stm32f4xx_ll_gpio.c
+    ${STM32CUBE_DIR}/Src/stm32f4xx_ll_fmc.c
     ${STM32CUBE_DIR}/Src/stm32f4xx_ll_tim.c
     ${STM32CUBE_DIR}/Src/stm32f4xx_ll_dma.c
     ${STM32CUBE_DIR}/Src/stm32f4xx_ll_usart.c
     ${STM32CUBE_DIR}/Src/stm32f4xx_ll_rcc.c
     ${STM32CUBE_DIR}/Src/stm32f4xx_ll_exti.c
+    ${STM32CUBE_DIR}/Src/stm32f4xx_ll_sdmmc.c
     ${STM32CUBE_DIR}/Src/stm32f4xx_ll_adc.c
     ${STM32CUBE_DIR}/Src/stm32f4xx_ll_spi.c
+    ${STM32CUBE_DIR}/Src/stm32f4xx_ll_usb.c
     # HAL drivers
     ${STM32CUBE_DIR}/Src/stm32f4xx_hal.c
     ${STM32CUBE_DIR}/Src/stm32f4xx_hal_pwr.c
     ${STM32CUBE_DIR}/Src/stm32f4xx_hal_pwr_ex.c
     ${STM32CUBE_DIR}/Src/stm32f4xx_hal_rcc.c
+    ${STM32CUBE_DIR}/Src/stm32f4xx_hal_rcc_ex.c
     ${STM32CUBE_DIR}/Src/stm32f4xx_hal_rtc.c
     ${STM32CUBE_DIR}/Src/stm32f4xx_hal_i2c.c
     ${STM32CUBE_DIR}/Src/stm32f4xx_hal_i2c_ex.c
+    ${STM32CUBE_DIR}/Src/stm32f4xx_hal_sd.c
+    ${STM32CUBE_DIR}/Src/stm32f4xx_hal_dma.c
+    ${STM32CUBE_DIR}/Src/stm32f4xx_hal_pcd.c
+    ${STM32CUBE_DIR}/Src/stm32f4xx_hal_pcd_ex.c
+    ${STM32CUBE_DIR}/Src/stm32f4xx_hal_flash.c
+    ${STM32CUBE_DIR}/Src/stm32f4xx_hal_flash_ex.c
+    ${STM32CUBE_DIR}/Src/stm32f4xx_hal_cortex.c
+    
+    ${STM32_COLORLCD_DRIVERS}
+    
     )
 
   target_compile_options(stm32cube_ll PRIVATE -DUSE_FULL_LL_DRIVER)
@@ -37,42 +65,27 @@ if(NOT NATIVE_BUILD)
 endif()
 
 # StdPeriph library
-set(STM32LIB_DIR ${THIRDPARTY_DIR}/STM32F4xx_DSP_StdPeriph_Lib_V1.8.0/Libraries)
-include_directories(${STM32LIB_DIR}/STM32F4xx_StdPeriph_Driver/inc)
+set(STM32LIB_DIR ${THIRDPARTY_DIR})
 include_directories(${STM32LIB_DIR}/CMSIS/Device/ST/STM32F4xx/Include)
 include_directories(${STM32LIB_DIR}/CMSIS/Include)
 
 add_definitions(-DSTM32F4)
 
-set(STM32_STDPERIPH_DIR ${STM32LIB_DIR}/STM32F4xx_StdPeriph_Driver)
-
 set(STM32_STDPERIPH_SRC
   targets/common/arm/stm32/f4/system_stm32f4xx.c
-  ${STM32_STDPERIPH_DIR}/src/misc.c
-  ${STM32_STDPERIPH_DIR}/src/stm32f4xx_gpio.c
-  ${STM32_STDPERIPH_DIR}/src/stm32f4xx_dbgmcu.c
-  ${STM32_STDPERIPH_DIR}/src/stm32f4xx_rcc.c
-  ${STM32_STDPERIPH_DIR}/src/stm32f4xx_spi.c
-  ${STM32_STDPERIPH_DIR}/src/stm32f4xx_dma.c
-  ${STM32_STDPERIPH_DIR}/src/stm32f4xx_flash.c
 )
 
 if(CPU_TYPE_FULL STREQUAL STM32F429xI)
   set(STM32_STDPERIPH_SRC ${STM32_STDPERIPH_SRC}
-    targets/${TARGET_DIR}/startup_stm32f42_43xxx.s
-    ${STM32_STDPERIPH_DIR}/src/stm32f4xx_fmc.c
-    ${STM32_STDPERIPH_DIR}/src/stm32f4xx_ltdc.c
-    ${STM32_STDPERIPH_DIR}/src/stm32f4xx_dma.c
-    ${STM32_STDPERIPH_DIR}/src/stm32f4xx_dma2d.c
-    ${STM32_STDPERIPH_DIR}/src/stm32f4xx_sdio.c
+    boards/generic_stm32/startup/startup_stm32f42_43xxx.s
     )
 elseif (CPU_TYPE_FULL STREQUAL STM32F413xG)
   set(STM32_STDPERIPH_SRC ${STM32_STDPERIPH_SRC}
-    targets/${TARGET_DIR}/startup_stm32f413vgtx.s
+    boards/generic_stm32/startup/startup_stm32f413xx.s
   )
 else()
   set(STM32_STDPERIPH_SRC ${STM32_STDPERIPH_SRC}
-    targets/${TARGET_DIR}/startup_stm32f40_41xxx.s
+    boards/generic_stm32/startup/startup_stm32f40_41xxx.s
     )  
 endif()
 

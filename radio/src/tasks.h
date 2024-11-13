@@ -19,8 +19,7 @@
  * GNU General Public License for more details.
  */
 
-#ifndef _TASKS_H_
-#define _TASKS_H_
+#pragma once
 
 #include "rtos.h"
 
@@ -30,8 +29,15 @@
 #else
   #define MENUS_STACK_SIZE     2000
 #endif
+
+#if !defined(DEBUG)
 #define MIXER_STACK_SIZE       400
 #define AUDIO_STACK_SIZE       400
+#else
+#define MIXER_STACK_SIZE       512
+#define AUDIO_STACK_SIZE       512
+#endif
+
 #define CLI_STACK_SIZE         1024  // only consumed with CLI build option
 
 #if defined(FREE_RTOS)
@@ -49,7 +55,10 @@
 
 extern TaskStack<MENUS_STACK_SIZE> menusStack;
 extern TaskStack<MIXER_STACK_SIZE> mixerStack;
+
+#if defined(AUDIO)
 extern TaskStack<AUDIO_STACK_SIZE> audioStack;
+#endif
 
 #if defined(CLI)
 extern TaskStack<CLI_STACK_SIZE> cliStack;
@@ -62,5 +71,3 @@ inline void resetForcePowerOffRequest()
 {
   timeForcePowerOffPressed = 0;
 }
-
-#endif // _TASKS_H_

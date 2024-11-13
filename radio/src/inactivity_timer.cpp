@@ -20,7 +20,8 @@
  */
 
 #include "inactivity_timer.h"
-#include "opentx.h"
+#include "hal/adc_driver.h"
+#include "edgetx.h"
 
 void inactivityTimerReset(ActivitySource src)
 {
@@ -48,17 +49,22 @@ void inactivityTimerReset(ActivitySource src)
   inactivity.counter = 0;
 }
 
-#define INAC_STICKS_SHIFT   6
+#define INAC_STICKS_SHIFT   7
 #define INAC_SWITCHES_SHIFT 8
 
 bool inactivityCheckInputs()
 {
   uint8_t sum = 0;
 
-  for (uint8_t i = 0; i < MAX_ANALOG_INPUTS; i++)
-    sum += anaIn(i) >> INAC_STICKS_SHIFT;
+  auto max_sticks = adcGetMaxInputs(ADC_INPUT_MAIN);
+  auto max_inputs = max_sticks + adcGetMaxInputs(ADC_INPUT_FLEX);
 
-  for (uint8_t i = 0; i < MAX_SWITCHES; i++)
+  for (uint8_t i = 0; i < max_inputs; i++) {
+    if (i < max_sticks || IS_POT_AVAILABLE(i - max_sticks))
+      sum += getAnalogValue(i) >> INAC_STICKS_SHIFT;
+  }
+
+  for (uint8_t i = 0; i < getSwitchCount(); i++)
     sum += getValue(MIXSRC_FIRST_SWITCH + i) >> INAC_SWITCHES_SHIFT;
 
 #if defined(IMU)

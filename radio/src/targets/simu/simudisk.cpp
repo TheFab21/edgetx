@@ -20,7 +20,7 @@
  */
 
 #if defined(SIMU_DISKIO)
-#include "opentx.h"
+#include "edgetx.h"
 #include "ff.h"
 #include "diskio.h"
 #include <time.h>
@@ -95,7 +95,7 @@ DSTATUS disk_status (BYTE pdrv)
   return (DSTATUS)0;
 }
 
-DRESULT __disk_read (BYTE pdrv, BYTE* buff, DWORD sector, UINT count)
+DRESULT disk_read (BYTE pdrv, BYTE* buff, DWORD sector, UINT count)
 {
   if (diskImage == 0) return RES_NOTRDY;
   traceDiskStatus();
@@ -105,7 +105,7 @@ DRESULT __disk_read (BYTE pdrv, BYTE* buff, DWORD sector, UINT count)
   return RES_OK;
 }
 
-DRESULT __disk_write (BYTE pdrv, const BYTE* buff, DWORD sector, UINT count)
+DRESULT disk_write (BYTE pdrv, const BYTE* buff, DWORD sector, UINT count)
 {
   if (diskImage == 0) return RES_NOTRDY;
   traceDiskStatus();

@@ -23,6 +23,7 @@
 #include "hal/serial_driver.h"
 #include "hal/module_port.h"
 #include "dataconstants.h"
+#include "debug.h"
 
 void intmoduleStop() {}
 void intmoduleFifoError() {}
@@ -44,24 +45,45 @@ void extmoduleSendNextFramePxx1(void const*, unsigned short) {}
 void extmoduleSendNextFrameSoftSerial(void const*, unsigned short, bool) {}
 void extmoduleSendNextFramePpm(void*, unsigned short, unsigned short, bool) {}
 
-void init_trainer_ppm() {}
-void stop_trainer_ppm() {}
-void init_trainer_capture() {}
-void stop_trainer_capture() {}
+bool trainer_dsc_available() { return true; }
+void trainer_init_dsc_out() {}
+void trainer_init_dsc_in() {}
+void trainer_stop_dsc() {}
 
-bool is_trainer_connected() { return false; }
+bool is_trainer_dsc_connected() { return false; }
 
-void init_trainer_module_cppm() {}
-void stop_trainer_module_cppm() {}
-
-void init_trainer_module_sbus() {}
-void stop_trainer_module_sbus() {}
+void trainer_init_module_cppm() {}
+void trainer_stop_module_cppm() {}
 
 void init_intmodule_heartbeat() {}
 void stop_intmodule_heartbeat() {}
 
-static void* init(void*, const etx_serial_init*) { return (void*)1; }
-static void deinit(void*) {}
+static bool _sport_used = false;
+
+static void* init(void* ctx, const etx_serial_init*)
+{
+  if (ctx == nullptr) {
+    return (void*)1;
+  }
+
+  if (ctx == (void*)&_sport_used) {
+    if (_sport_used) {
+      return nullptr;
+    }
+
+    _sport_used = true;
+    return &_sport_used;
+  }
+
+  return nullptr;
+}
+
+static void deinit(void* ctx)
+{
+  if (ctx != (void*)&_sport_used) return;
+  _sport_used = false;
+}
+
 static void sendByte(void*, uint8_t) {}
 static void sendBuffer(void*, const uint8_t*, uint32_t) {}
 static void waitForTxCompleted(void*) {}
@@ -77,6 +99,8 @@ const etx_serial_driver_t _fakeSerialDriver = {
     .enableRx = nullptr,
     .getByte = getByte,
     .getLastByte = nullptr,
+    .getBufferedBytes = nullptr,
+    .copyRxBuffer = nullptr,
     .clearRxBuffer = nullptr,
     .getBaudrate = nullptr,
     .setBaudrate = nullptr,
@@ -127,7 +151,7 @@ const etx_module_port_t _internal_ports[] = {
     .type = ETX_MOD_TYPE_SERIAL,
     .dir_flags = ETX_MOD_DIR_TX | ETX_MOD_DIR_RX,
     .drv = { .serial = &_fakeSerialDriver },
-    .hw_def = nullptr,
+    .hw_def = &_sport_used,
   },
 #endif
 };
@@ -161,6 +185,15 @@ const etx_module_port_t _external_ports[] = {
     .drv = { .serial = &_fakeSerialDriver },
     .hw_def = nullptr,
   },
+#elif defined(TRAINER_MODULE_SBUS_USART)
+  // RX on HEARTBEAT
+  {
+    .port = ETX_MOD_PORT_UART,
+    .type = ETX_MOD_TYPE_SERIAL,
+    .dir_flags = ETX_MOD_DIR_RX,
+    .drv = { .serial = &_fakeSerialDriver },
+    .hw_def = nullptr,
+  },  
 #endif
   // Timer output on PPM
   {
@@ -170,7 +203,7 @@ const etx_module_port_t _external_ports[] = {
     .drv = { .timer = &_fakeTimerDriver },
     .hw_def = nullptr,
   },
-  // TX inverted DMA pulse train on S.PORT
+  // TX inverted DMA pulse train on PPM
   {
     .port = ETX_MOD_PORT_SOFT_INV,
     .type = ETX_MOD_TYPE_SERIAL,
@@ -178,13 +211,23 @@ const etx_module_port_t _external_ports[] = {
     .drv = { .serial = &_fakeSerialDriver },
     .hw_def = nullptr,
   },
+#if defined(TRAINER_MODULE_CPPM_TIMER)
+  // Timer input on HEARTBEAT
+  {
+    .port = ETX_MOD_PORT_TIMER,
+    .type = ETX_MOD_TYPE_TIMER,
+    .dir_flags = ETX_MOD_DIR_RX,
+    .drv = { .timer = nullptr },
+    .hw_def = nullptr,
+  },
+#endif
   // TX/RX half-duplex on S.PORT
   {
     .port = ETX_MOD_PORT_SPORT,
     .type = ETX_MOD_TYPE_SERIAL,
     .dir_flags = ETX_MOD_DIR_TX | ETX_MOD_DIR_RX,
     .drv = { .serial = &_fakeSerialDriver },
-    .hw_def = nullptr,
+    .hw_def = &_sport_used,
   },
 #if defined(TELEMETRY_TIMER)
   // RX soft-serial sampled bit-by-bit via timer IRQ on S.PORT

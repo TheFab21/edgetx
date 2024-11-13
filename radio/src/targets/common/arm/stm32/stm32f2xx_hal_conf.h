@@ -71,7 +71,7 @@
 // #define HAL_SMARTCARD_MODULE_ENABLED
 // #define HAL_WWDG_MODULE_ENABLED
 // #define HAL_CORTEX_MODULE_ENABLED
-// #define HAL_PCD_MODULE_ENABLED
+#define HAL_PCD_MODULE_ENABLED
 // #define HAL_HCD_MODULE_ENABLED
 // #define HAL_MMC_MODULE_ENABLED
 
@@ -86,7 +86,7 @@
 #endif /* HSE_VALUE */
 
 #if !defined  (HSE_STARTUP_TIMEOUT)
-  #define HSE_STARTUP_TIMEOUT               100U       /*!< Time out for HSE start up, in ms */
+  #define HSE_STARTUP_TIMEOUT              2000U       /*!< Time out for HSE start up, in cycles */
 #endif /* HSE_STARTUP_TIMEOUT */
 
 /**

@@ -1,7 +1,8 @@
 /*
- * Copyright (C) OpenTX
+ * Copyright (C) EdgeTX
  *
  * Based on code named
+ *   opentx - https://github.com/opentx/opentx
  *   th9x - http://code.google.com/p/th9x
  *   er9x - http://code.google.com/p/er9x
  *   gruvin9x - http://code.google.com/p/gruvin9x
@@ -553,8 +554,7 @@ void MdiChild::initModelsList()
   if (labelsListModel)
     delete labelsListModel;
 
-  labelsListModel = new LabelsModel(ui->modelsList->selectionModel(),
-                                    &radioData, this);
+  labelsListModel = new LabelsModel(modelsListProxyModel, ui->modelsList->selectionModel(), &radioData, this);
   connect(labelsListModel, &LabelsModel::modelChanged, this, &MdiChild::modelLabelsChanged);
   connect(labelsListModel, &LabelsModel::labelsFault, this, &MdiChild::labelsFault);
   ui->lstLabels->setModel(labelsListModel);
@@ -740,7 +740,6 @@ void MdiChild::checkAndInitModel(int row)
 {
   if (row < (int)radioData.models.size() && radioData.models[row].isEmpty()) {
     radioData.models[row].setDefaultValues(row, radioData.generalSettings);
-    setModified();
   }
 }
 
@@ -828,7 +827,7 @@ int MdiChild::newModel(int modelIndex)
   if (countUsedModels() == 1) {
     radioData.setCurrentModel(modelIndex);
   }
-  setModified();
+  setModelModified(modelIndex);
   setSelectedModel(modelIndex);
 
   if (isNewModel) {
@@ -917,7 +916,7 @@ void MdiChild::pasteModelData(const QMimeData * mimeData, const QModelIndex row,
 
   bool modified = false;
   int modelIdx = modelsListModel->getModelIndex(row);
-  unsigned inserts = 0;
+  // unsigned inserts = 0;
   QVector<int> deletesList;
 
   // Force DnD moves from other file windows to be copy actions because we don't want to delete our models.
@@ -944,7 +943,7 @@ void MdiChild::pasteModelData(const QMimeData * mimeData, const QModelIndex row,
       ok = insertModelRows(modelIdx, 1);
       if (ok) {
         radioData.models[modelIdx] = modelsList[i];
-        ++inserts;
+        // ++inserts;
       }
     }
     else if (!deletesList.contains(modelIdx)) {
@@ -972,7 +971,7 @@ void MdiChild::pasteModelData(const QMimeData * mimeData, const QModelIndex row,
           ok = insertModelRows(modelIdx, 1);
           if (ok) {
             radioData.models[modelIdx] = modelsList[i];
-            ++inserts;
+            // ++inserts;
           }
         }
         else if (msgBox.clickedButton() == cancelButton) {
@@ -988,6 +987,7 @@ void MdiChild::pasteModelData(const QMimeData * mimeData, const QModelIndex row,
       strcpy(radioData.models[modelIdx].filename, radioData.getNextModelFilename().toStdString().c_str());
       lastSelectedModel = modelIdx;  // after refresh the last pasted model will be selected
       modified = true;
+      setModelModified(modelIdx, false);  // avoid unnecessary refreshes
       if (doMove) {
         deletesList.append(origMdlIdx);
         removeModelFromCutList(origMdlIdx);
@@ -1096,7 +1096,7 @@ bool MdiChild::hasClipboardData(const quint8 type) const
     return modelsListModel->hasModelsMimeData(QApplication::clipboard()->mimeData());
   }
   else {
-    return modelsListModel->hasGenralMimeData(QApplication::clipboard()->mimeData());
+    return modelsListModel->hasGeneralMimeData(QApplication::clipboard()->mimeData());
   }
 }
 
@@ -1116,7 +1116,7 @@ void MdiChild::insert()
 
 void MdiChild::edit()
 {
-  onItemActivated(getCurrentIndex());
+  onItemActivated(ui->modelsList->selectionModel()->currentIndex());
 }
 
 void MdiChild::confirmDelete()
@@ -1176,7 +1176,7 @@ void MdiChild::openModelWizard(int row)
   int res = wizard->exec();
   if (res == QDialog::Accepted && wizard->mix.complete /*TODO rather test the exec() result?*/) {
     radioData.models[row] = wizard->mix;
-    setModified();
+    setModelModified(row);
     setSelectedModel(row);
   }
 }
@@ -1201,7 +1201,7 @@ void MdiChild::openModelEditWindow(int row)
   ModelEdit * t = new ModelEdit(this, radioData, (row), firmware);
   gStopwatch.report("ModelEdit created");
   t->setWindowTitle(tr("Editing model %1: ").arg(row+1) + QString(model.name) + QString("   (%1)").arg(userFriendlyCurrentFile()));
-  connect(t, &ModelEdit::modified, this, &MdiChild::setModified);
+  connect(t, &ModelEdit::modified, this, &MdiChild::setCurrentModelModified);
   gStopwatch.report("STARTING MODEL EDIT");
   t->show();
   QApplication::restoreOverrideCursor();
@@ -1252,6 +1252,7 @@ void MdiChild::newFile(bool createDefaults)
   isUntitled = true;
   curFile = QString("document%1.etx").arg(sequenceNumber++);
   updateTitle();
+  modelsListModel->setFilename(curFile);
   radioData.addLabel(tr("Favorites"));
   labelsListModel->buildLabelsList();
 }
@@ -1277,6 +1278,9 @@ bool MdiChild::loadFile(const QString & filename, bool resetCurrentFile)
   if (resetCurrentFile) {
     setCurrentFile(filename);
   }
+
+  if (radioData.generalSettings.fix6POSCalibration())
+    setModified();
 
   //  set after successful import
   if (getStorageType(filename) == STORAGE_TYPE_YML)
@@ -1323,8 +1327,6 @@ bool MdiChild::saveAs(bool isNew)
   }
   while (QFileInfo(fileName).suffix().toLower() != "etx");
 
-  g.eepromDir(QFileInfo(fileName).dir().absolutePath());
-
   return saveFile(fileName, true);
 }
 
@@ -1336,6 +1338,15 @@ bool MdiChild::saveFile(const QString & filename, bool setCurrent)
   if (!result) {
     return false;
   }
+
+  g.eepromDir(QFileInfo(filename).dir().absolutePath());
+
+  for (int i = 0; i < (int)radioData.models.size(); i++) {
+    if (!radioData.models[i].isEmpty())
+      radioData.models[i].modelUpdated = false;
+  }
+
+  refresh();
 
   if (setCurrent) {
     setCurrentFile(filename);
@@ -1386,6 +1397,7 @@ void MdiChild::setCurrentFile(const QString & fileName)
   isUntitled = false;
   setWindowModified(false);
   updateTitle();
+  modelsListModel->setFilename(curFile);
 
   QStringList files = g.recentFiles();
   files.removeAll(curFile);
@@ -1658,12 +1670,17 @@ void MdiChild::openModelTemplate(int row)
     QMessageBox::warning(this, CPN_STR_TTL_WARNING, warning);
   }
 
+  if (radioData.generalSettings.fix6POSCalibration())
+    setModified();
+
   radioData.models[row] = data.models[0];
 
   //  reset module bindings
   for (int i = 0; i < CPN_MAX_MODULES; i++) {
     radioData.models[row].moduleData[i].modelId = row + 1;
   }
+
+  setModelModified(row);
 }
 
 void MdiChild::openModelPrompt(int row)
@@ -1742,7 +1759,7 @@ void MdiChild::labelMoveUp()
   if(row == 0) return;
   radioData.swapLabel(row, row-1);
   labelsListModel->buildLabelsList();
-  ui->lstLabels->selectionModel()->setCurrentIndex(labelsListModel->index(row-1,0), QItemSelectionModel::ClearAndSelect);
+  ui->lstLabels->selectionModel()->setCurrentIndex(labelsListModel->index(row - 1,0), QItemSelectionModel::ClearAndSelect);
 }
 
 void MdiChild::labelMoveDown()
@@ -1751,15 +1768,16 @@ void MdiChild::labelMoveDown()
   if(row == labelsListModel->rowCount() -1) return;
   radioData.swapLabel(row, row+1);
   labelsListModel->buildLabelsList();
-  ui->lstLabels->selectionModel()->setCurrentIndex(labelsListModel->index(row+1,0), QItemSelectionModel::ClearAndSelect);
+  ui->lstLabels->selectionModel()->setCurrentIndex(labelsListModel->index(row + 1,0), QItemSelectionModel::ClearAndSelect);
 }
 
-void MdiChild::modelLabelsChanged(int row)
+void MdiChild::modelLabelsChanged(int index)
 {
   setWindowModified(true);
   refresh();
-  ui->modelsList->selectionModel()->select(modelsListModel->index(row,0), QItemSelectionModel::ClearAndSelect |
-                                                                          QItemSelectionModel::Rows);
+  const QModelIndex idx = modelsListProxyModel->mapFromSource(modelsListModel->getIndexForModel(index));
+  ui->modelsList->selectionModel()->select(idx, QItemSelectionModel::ClearAndSelect |
+                                                                           QItemSelectionModel::Rows);
 }
 
 void MdiChild::labelsFault(QString msg)
@@ -1817,4 +1835,18 @@ bool MdiChild::exportModel(const int modelIndex)
 void MdiChild::exportSelectedModels()
 {
   exportModels(getSelectedModels());
+}
+
+void MdiChild::setCurrentModelModified()
+{
+  setModelModified(getCurrentModel());
+}
+
+void MdiChild::setModelModified(const int modelIndex, bool cascade)
+{
+  if (modelIndex >= 0 && modelIndex < (int)radioData.models.size()) {
+    radioData.models[modelIndex].modelUpdated = true;
+    if (cascade)
+      setModified();
+  }
 }

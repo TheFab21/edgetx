@@ -19,7 +19,7 @@
  * GNU General Public License for more details.
  */
 
-#include "opentx.h"
+#include "edgetx.h"
 
 enum ChinesePrompts {
   CN_PROMPT_NUMBERS_BASE = 0,
@@ -34,7 +34,7 @@ enum ChinesePrompts {
 };
 
 
-  #define CN_PUSH_UNIT_PROMPT(u, p) cn_pushUnitPrompt((u), (p), id)
+#define CN_PUSH_UNIT_PROMPT(u, p) cn_pushUnitPrompt((u), (p), id, fragmentVolume)
 
 I18N_PLAY_FUNCTION(cn, pushUnitPrompt, uint8_t unitprompt, int16_t number)
 {

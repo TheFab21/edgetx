@@ -19,8 +19,7 @@
  * GNU General Public License for more details.
  */
 
-#ifndef _boot_h_
-#define _boot_h_
+#pragma once
 
 #include <stdint.h>
 #include "stamp.h"
@@ -54,6 +53,10 @@ enum BootloaderState {
   ST_FLASH_DONE,
   ST_RESTORE_MENU,
   ST_USB,
+#if defined(SPI_FLASH)
+  ST_CLEAR_FLASH_CHECK,
+  ST_CLEAR_FLASH,
+#endif
   ST_RADIO_MENU,
   ST_REBOOT,
 };
@@ -85,5 +88,3 @@ uint32_t bootloaderGetMenuItemCount(int baseCount);
 bool bootloaderRadioMenu(uint32_t menuItem, event_t event);
 
 void blExit();
-
-#endif

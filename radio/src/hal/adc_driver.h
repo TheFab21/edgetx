@@ -22,7 +22,7 @@
 #pragma once
 
 #include <stdint.h>
-#include "opentx_types.h"
+#include "edgetx_types.h"
 
 // 12-bit values
 #define ADC_MAX_VALUE 4095
@@ -37,8 +37,7 @@
 
 enum {
   ADC_INPUT_MAIN=0, // gimbals / wheel + throttle
-  ADC_INPUT_POT,
-  ADC_INPUT_AXIS,
+  ADC_INPUT_FLEX,
   ADC_INPUT_VBAT,
   ADC_INPUT_RTC_BAT,
   ADC_INPUT_ALL,
@@ -78,6 +77,9 @@ struct etx_hal_adc_driver_t {
   bool (*init)();
   bool (*start_conversion)();
   void (*wait_completion)();
+
+  void (*set_input_mask)(uint32_t);
+  uint32_t (*get_input_mask)();
 };
 
 bool adcInit(const etx_hal_adc_driver_t* driver);
@@ -91,6 +93,9 @@ void setAnalogValue(uint8_t index, uint16_t value);
 uint16_t* getAnalogValues();
 
 // Run calibration steps:
+
+// Set default values before loading radio settings
+void adcCalibDefaults();
 
 // Set mid-points and reset min/max in temporary buffer
 void adcCalibSetMidPoint();
@@ -134,6 +139,9 @@ int adcGetInputIdx(const char* input, uint8_t len);
 
 const char* adcGetInputLabel(uint8_t type, uint8_t idx);
 const char* adcGetInputShortLabel(uint8_t type, uint8_t idx);
+
+void adcSetInputMask(uint32_t mask);
+uint32_t adcGetInputMask();
 
 // To be implemented by the target driver
 // int8_t adcGetVRTC();

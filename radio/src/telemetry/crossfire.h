@@ -19,8 +19,7 @@
  * GNU General Public License for more details.
  */
 
-#ifndef _CROSSFIRE_H_
-#define _CROSSFIRE_H_
+#pragma once
 
 #include <inttypes.h>
 #include "dataconstants.h"
@@ -29,6 +28,7 @@
 #define BROADCAST_ADDRESS              0x00
 #define RADIO_ADDRESS                  0xEA
 #define MODULE_ADDRESS                 0xEE
+#define RECEIVER_ADDRESS               0xEC
 
 // Frame id
 #define GPS_ID                         0x02
@@ -50,13 +50,16 @@
 #define UART_SYNC                      0xC8
 #define SUBCOMMAND_CRSF                0x10
 #define COMMAND_MODEL_SELECT_ID        0x05
+#define SUBCOMMAND_CRSF_BIND           0x01
+
+constexpr uint8_t CRSF_NAME_MAXSIZE = 16;
 
 struct CrossfireSensor {
   const uint8_t id;
   const uint8_t subId;
-  const char * name;
   const TelemetryUnit unit;
   const uint8_t precision;
+  const char * name;
 };
 
 enum CrossfireSensorIndexes {
@@ -100,9 +103,23 @@ enum CrossfireFrames{
   CRSF_FRAME_MODELID_SENT
 };
 
-void processCrossfireTelemetryFrame(uint8_t module);
+struct CrossfireModuleStatus
+{
+    uint8_t major;
+    uint8_t minor;
+    uint8_t revision;
+    char name[CRSF_NAME_MAXSIZE];
+    bool queryCompleted;
+    bool isELRS;
+};
+
+extern CrossfireModuleStatus crossfireModuleStatus[2];
+
+void processCrossfireTelemetryFrame(uint8_t module, uint8_t* rxBuffer,
+                                    uint8_t rxBufferCount);
 void crossfireSetDefault(int index, uint8_t id, uint8_t subId);
-uint8_t createCrossfireModelIDFrame(uint8_t * frame);
+
+uint8_t createCrossfireModelIDFrame(uint8_t* frame);
 
 const uint32_t CROSSFIRE_BAUDRATES[] = {
   115200,
@@ -160,8 +177,8 @@ const uint8_t CROSSFIRE_FRAME_PERIODS[] = {
 #define CROSSFIRE_PERIOD(module) INT_CROSSFIRE_PERIOD
 #elif defined(HARDWARE_EXTERNAL_MODULE)
 #define CROSSFIRE_PERIOD(module) EXT_CROSSFIRE_PERIOD
+#else
+#define CROSSFIRE_PERIOD(module) 4000
 #endif
 
 #define CROSSFIRE_TELEM_MIRROR_BAUDRATE   115200
-
-#endif // _CROSSFIRE_H_
